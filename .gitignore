@@ -11,7 +11,7 @@ profile_default/
 ipython_config.py
 
 # output files
-*.gif
+
 *.txt
 *.mp4
 !output/README.md

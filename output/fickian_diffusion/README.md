@@ -37,4 +37,4 @@ This formulation demonstrates that the familiar concentration gradient-driven di
 
 The following animation shows a 2D simulation of Fickian diffusion, where an initial high concentration of particles in the center spreads out over time.
 
-![2D Diffusion Simulation](../assets/diffusion_video_2D-ezgif.com-speed.gif)
+![2D Diffusion Simulation](../../assets/diffusion_video_2D-ezgif.com-speed.gif)
