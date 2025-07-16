@@ -14,3 +14,4 @@ ipython_config.py
 output/*
 *.png
 frames*/
+*.npz

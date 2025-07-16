@@ -4,27 +4,44 @@ from scipy.sparse.linalg import spsolve
 import matplotlib.tri as mtri
 from utils.fem_matrices import assemble_2DMatrices
 from utils.fem_mesh import create_structured_mesh
-
+import os
 
 def solve_2D_diffusion_fem():
     """Main function to solve the 2D Fickian diffusion problem."""
     # --- Simulation Parameters ---
-    Lx, Ly = 1.0, 1.0   # Domain size
-    D = 0.003            # Diffusion coefficient
-    T = 2.0             # Total simulation time
-    nx, ny = 50, 50     # Number of elements in each direction
     dt = 0.005           # Time step
+    T = 2.0             # Total simulation time
+    D = 0.003            # Diffusion coefficient
+    
 
-    # --- Mesh ---
-    nodes, elements = create_structured_mesh(Lx, Ly, nx, ny)
+
+    if not os.path.exists("utils/initial_conditions.npz"):
+        print("Initial conditions not found. Defaulting to a Gaussian peak in the middle.")
+        Lx, Ly = 1.0, 1.0   # Domain size
+        nx, ny = 50, 50     # Number of elements in each direction
+
+        # --- Mesh ---
+        nodes, elements = create_structured_mesh(Lx, Ly, nx, ny)
+
+        # --- Initial Condition ---
+        C = np.zeros(num_nodes)
+        # Set a Gaussian peak in the middle
+        center_x, center_y = Lx / 2, Ly / 2
+        sigma = 0.1
+        C = np.exp(-((nodes[:, 0] - center_x)**2 + (nodes[:, 1] - center_y)**2) / (2 * sigma**2))
+    else:
+        data = np.load("utils/initial_conditions.npz")
+        nodes = data['nodes']
+        elements = data['elements']
+        C = data['initial_values']
+        Lx = nodes[:, 0].max() - nodes[:, 0].min()
+        Ly = nodes[:, 1].max() - nodes[:, 1].min()
+        nx = nodes.shape[0]
+        ny = nodes.shape[1]
+        
+        
+    
     num_nodes = nodes.shape[0]
-
-    # --- Initial Condition ---
-    C = np.zeros(num_nodes)
-    # Set a Gaussian peak in the middle
-    center_x, center_y = Lx / 2, Ly / 2
-    sigma = 0.1
-    C = np.exp(-((nodes[:, 0] - center_x)**2 + (nodes[:, 1] - center_y)**2) / (2 * sigma**2))
 
     # --- Assemble Matrices ---
     M, K = assemble_2DMatrices(nodes, elements, D)
