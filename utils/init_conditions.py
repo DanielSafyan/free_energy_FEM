@@ -51,10 +51,11 @@ class Grid:
         # Create gaussian distribution
         gaussian = np.exp(-((xx - center_x)**2 + (yy - center_y)**2) / (2 * variance))
         self.values += gaussian
-        # Normalize to keep values roughly in a manageable range, e.g., [0, 1]
-        self.values = np.clip(self.values, 0, np.max(self.values))
-        if np.max(self.values) > 0:
-             self.values /= np.max(self.values)
+        # Clip values to be within [0, 0.9]
+        self.values = np.clip(self.values, 0, 0.9)
+
+    def paint_cell(self, cell):
+        self.values[cell] = min(0.9, self.values[cell] + 0.3)
 
 
 def draw_axes(screen, rect, max_x, max_y, font, color):
@@ -106,53 +107,33 @@ def draw_color_bar(screen, rect, cmap, norm):
     screen.blit(max_label, (rect.right + 5, rect.top - 7))
     screen.blit(min_label, (rect.right + 5, rect.bottom - 7))
 
-def create_and_save_mesh(grid_values, max_x, max_y, filename="utils/initial_conditions.npz"):
+def save_initial_conditions(grid_values, nx, ny, filename="c1_initial.npz"):
     """
-    Generates a mesh of nodes and triangular elements from a grid and saves it.
-    Also saves the grid values as initial conditions for the nodes.
+    Interpolates grid cell values to node values and saves them.
     """
-    x_cells, y_cells = grid_values.shape
-    num_nodes_x = x_cells + 1
-    num_nodes_y = y_cells + 1
-
-    # Create nodes
-    x = np.linspace(0, max_x, num_nodes_x)
-    y = np.linspace(0, max_y, num_nodes_y)
-    xx, yy = np.meshgrid(x, y)
-    nodes = np.vstack([xx.ravel(), yy.ravel()]).T
-
-    # Create elements
-    elements = []
-    for j in range(y_cells):
-        for i in range(x_cells):
-            n1 = j * num_nodes_x + i
-            n2 = n1 + 1
-            n3 = (j + 1) * num_nodes_x + i
-            n4 = n3 + 1
-            elements.append([n1, n2, n3])
-            elements.append([n2, n4, n3])
-    elements = np.array(elements)
+    num_nodes_x = nx + 1
+    num_nodes_y = ny + 1
+    node_values = np.zeros((num_nodes_x * num_nodes_y,))
 
     # Interpolate grid cell values to node values
     # Simple average of surrounding cells for each node
-    node_values = np.zeros(nodes.shape[0])
     for i in range(num_nodes_x):
         for j in range(num_nodes_y):
             node_idx = j * num_nodes_x + i
             # Average values of cells touching this node
             neighbor_cells = []
             if i > 0 and j > 0: neighbor_cells.append(grid_values[i-1, j-1])
-            if i < x_cells and j > 0: neighbor_cells.append(grid_values[i, j-1])
-            if i > 0 and j < y_cells: neighbor_cells.append(grid_values[i-1, j])
-            if i < x_cells and j < y_cells: neighbor_cells.append(grid_values[i, j])
+            if i < nx and j > 0: neighbor_cells.append(grid_values[i, j-1])
+            if i > 0 and j < ny: neighbor_cells.append(grid_values[i-1, j])
+            if i < nx and j < ny: neighbor_cells.append(grid_values[i, j])
             
             if neighbor_cells:
                 node_values[node_idx] = np.mean(neighbor_cells)
 
-    np.savez(filename, nodes=nodes, elements=elements, initial_values=node_values)
-    print(f"Saved mesh and initial conditions to {filename}")
+    np.savez(filename, c1_initial=node_values)
+    print(f"Saved initial conditions to {filename}")
 
-def main():
+def main(nx=32, ny=32, Lx=1.0, Ly=1.0):
     pygame.init()
 
     window_size = (1200, 800)
@@ -170,19 +151,19 @@ def main():
     # Grid parameters
     pygame_gui.elements.UILabel(relative_rect=pygame.Rect((10, 10), (100, 25)), text="X Cells:", manager=ui_manager, container=ui_panel)
     x_cells_input = pygame_gui.elements.UITextEntryLine(relative_rect=pygame.Rect((120, 10), (150, 25)), manager=ui_manager, container=ui_panel)
-    x_cells_input.set_text("32")
+    x_cells_input.set_text(str(nx))
 
     pygame_gui.elements.UILabel(relative_rect=pygame.Rect((10, 40), (100, 25)), text="Y Cells:", manager=ui_manager, container=ui_panel)
     y_cells_input = pygame_gui.elements.UITextEntryLine(relative_rect=pygame.Rect((120, 40), (150, 25)), manager=ui_manager, container=ui_panel)
-    y_cells_input.set_text("32")
+    y_cells_input.set_text(str(ny))
 
     pygame_gui.elements.UILabel(relative_rect=pygame.Rect((10, 70), (100, 25)), text="Max X:", manager=ui_manager, container=ui_panel)
     max_x_input = pygame_gui.elements.UITextEntryLine(relative_rect=pygame.Rect((120, 70), (150, 25)), manager=ui_manager, container=ui_panel)
-    max_x_input.set_text("1.0")
+    max_x_input.set_text(str(Lx))
 
     pygame_gui.elements.UILabel(relative_rect=pygame.Rect((10, 100), (100, 25)), text="Max Y:", manager=ui_manager, container=ui_panel)
     max_y_input = pygame_gui.elements.UITextEntryLine(relative_rect=pygame.Rect((120, 100), (150, 25)), manager=ui_manager, container=ui_panel)
-    max_y_input.set_text("1.0")
+    max_y_input.set_text(str(Ly))
     
     pygame_gui.elements.UILabel(relative_rect=pygame.Rect((10, 130), (100, 25)), text="Initial Value:", manager=ui_manager, container=ui_panel)
     initial_value_input = pygame_gui.elements.UITextEntryLine(relative_rect=pygame.Rect((120, 130), (150, 25)), manager=ui_manager, container=ui_panel)
@@ -195,7 +176,8 @@ def main():
     variance_input = pygame_gui.elements.UITextEntryLine(relative_rect=pygame.Rect((120, 220), (150, 25)), manager=ui_manager, container=ui_panel)
     variance_input.set_text("5.0")
 
-    gaussian_mode_button = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((10, 260), (260, 30)), text="Toggle Gaussian Mode (OFF)", manager=ui_manager, container=ui_panel)
+    gaussian_mode_button = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((10, 260), (125, 30)), text="Gaussian Mode", manager=ui_manager, container=ui_panel)
+    brush_mode_button = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((145, 260), (125, 30)), text="Brush Mode", manager=ui_manager, container=ui_panel)
 
     # Save button
     save_button = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((10, 310), (260, 30)), text="Save Initial Conditions", manager=ui_manager, container=ui_panel)
@@ -209,11 +191,11 @@ def main():
     grid_area_rect = pygame.Rect(margin['left'], margin['top'], available_width, available_height)
 
     # Initial grid
-    grid = Grid(screen, 32, 32, grid_area_rect, 0.1)
+    grid = Grid(screen, nx, ny, grid_area_rect, float(initial_value_input.get_text()))
 
     clock = pygame.time.Clock()
     is_running = True
-    gaussian_mode = False
+    paint_mode = 'none'  # can be 'gaussian', 'brush', or 'none'
 
     while is_running:
         time_delta = clock.tick(60)/1000.0
@@ -250,29 +232,31 @@ def main():
                         print("Invalid grid parameters")
 
                 if event.ui_element == gaussian_mode_button:
-                    gaussian_mode = not gaussian_mode
-                    if gaussian_mode:
-                        gaussian_mode_button.set_text("Toggle Gaussian Mode (ON)")
-                    else:
-                        gaussian_mode_button.set_text("Toggle Gaussian Mode (OFF)")
+                    paint_mode = 'gaussian' if paint_mode != 'gaussian' else 'none'
+                
+                if event.ui_element == brush_mode_button:
+                    paint_mode = 'brush' if paint_mode != 'brush' else 'none'
                 
                 if event.ui_element == save_button:
                     try:
                         max_x = float(max_x_input.get_text())
                         max_y = float(max_y_input.get_text())
-                        create_and_save_mesh(grid.values, max_x, max_y)
+                        save_initial_conditions(grid.values, grid.x_cells, grid.y_cells)
+                        is_running = False # Close UI after saving
                     except ValueError:
                         print("Invalid max coordinates")
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if gaussian_mode:
-                    cell = grid.get_cell_from_pos(event.pos)
-                    if cell:
+                cell = grid.get_cell_from_pos(event.pos)
+                if cell:
+                    if paint_mode == 'gaussian':
                         try:
                             variance = float(variance_input.get_text())
                             grid.add_gaussian(cell[0], cell[1], variance)
                         except ValueError:
                             print("Invalid variance for Gaussian")
+                    elif paint_mode == 'brush':
+                        grid.paint_cell(cell)
 
             ui_manager.process_events(event)
 

@@ -23,7 +23,8 @@ def solve_2D_diffusion_fem():
         # --- Mesh ---
         nodes, elements = create_structured_mesh(Lx, Ly, nx, ny)
 
-        # --- Initial Condition ---
+        # --- Initialize Fields ---
+        num_nodes = nodes.shape[0]
         C = np.zeros(num_nodes)
         # Set a Gaussian peak in the middle
         center_x, center_y = Lx / 2, Ly / 2
@@ -44,13 +45,20 @@ def solve_2D_diffusion_fem():
     num_nodes = nodes.shape[0]
 
     # --- Assemble Matrices ---
-    M, K = assemble_2DMatrices(nodes, elements, D)
+    M, K = assemble_2DMatrices(nodes, elements)
+    K = D * K
 
     # --- Boundary Conditions (Dirichlet C=0 on all boundaries) ---
     boundary_nodes = np.where((nodes[:, 0] == 0) | (nodes[:, 0] == Lx) |
                               (nodes[:, 1] == 0) | (nodes[:, 1] == Ly))[0]
 
     # --- Time Stepping (Backward Euler) ---
+    # M * (c_new - c_old)/dt + K * c_new = 0  ( 0 because there is no external source term)
+    # M * c_new / dt - M * c_old / dt + K * c_new = 0
+    # (M + dt * K) * c_new = M * c_old 
+    # A * c_new = M * c_old
+    # A * c_new = b_old
+
     # System matrix A = M + dt*K
     A = M + dt * K
     A = A.tolil() # Convert to LIL for efficient row modification
@@ -69,7 +77,7 @@ def solve_2D_diffusion_fem():
     for t in np.arange(0, T, dt):
         # Calculate RHS vector b = M * C_old
         b = M @ C
-        # Enforce BC on the RHS vector
+        # Enforce Dirichlet BC on the RHS vector
         b[boundary_nodes] = 0
         
         # Solve the linear system A * C_new = b

@@ -1,10 +1,10 @@
 import numpy as np
 from scipy.sparse import diags, lil_matrix
 
-def assemble_1DMatrices(n_elements, dx, D):
+def assemble_1DMatrices(n_elements, dx):
     """Assemble the mass and stiffness matrices for a 1D diffusion problem."""
     # Element stiffness matrix
-    ke = D / dx * np.array([[1, -1], [-1, 1]])
+    ke = 1 / dx * np.array([[1, -1], [-1, 1]])
     # Element mass matrix
     me = dx / 6 * np.array([[2, 1], [1, 2]])
 
@@ -19,7 +19,7 @@ def assemble_1DMatrices(n_elements, dx, D):
 
     return M, K
 
-def assemble_2DMatrices(nodes, elements, D):
+def assemble_2DMatrices(nodes, elements):
     """
     Assemble the global stiffness and mass matrices for a 2D diffusion problem.
 
@@ -69,8 +69,8 @@ def assemble_2DMatrices(nodes, elements, D):
         ])
 
         # --- Calculate Element Stiffness and Mass Matrices ---
-        # ke = D * Area * (B^T @ B)
-        ke = D * area * (B.T @ B)
+        # ke = Area * (B^T @ B)
+        ke = area * (B.T @ B)
 
         # me = Area * template
         me = area * me_template

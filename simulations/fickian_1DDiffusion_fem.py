@@ -23,7 +23,8 @@ def solve_diffusion_fem():
     C[n_elements // 2] = 1.0
 
     # --- Assemble Matrices ---
-    M, K = assemble_1DMatrices(n_elements, dx, D)
+    M, K = assemble_1DMatrices(n_elements, dx)
+    K = D * K
 
     # --- Boundary Conditions (Dirichlet) ---
     # C(0, t) = 0, C(L, t) = 0
