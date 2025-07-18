@@ -22,8 +22,8 @@ $$ G = c_1 G_1^0 + c_2 G_2^0 + RT(c_1 \ln(c_1) + c_2 \ln(c_2)) + \Omega c_1 c_2 
 
 The chemical potential for each species is derived by taking the partial derivative of the total Gibbs energy. This results in coupled equations where the chemical potential of one species depends on the concentration of the other:
 
-$$ \mu_1 = \mu_1^0 + RT \ln(c_1) + \Omega(1-c_1)^2 $$
-$$ \mu_2 = \mu_2^0 + RT \ln(c_2) + \Omega(1-c_2)^2 $$
+$$ \mu_1 = \mu_1^0 + RT \ln(c_1) + \Omega(1-c_1)^2 = \mu_1^0 + RT \ln(c_1) + \Omega c_2^2 $$
+$$ \mu_2 = \mu_2^0 + RT \ln(c_2) + \Omega(1-c_2)^2 = \mu_2^0 + RT \ln(c_2) + \Omega c_1^2 $$
 
 When these expressions are used in the flux equation ($ J = -M c \nabla \mu $), the model can capture phenomena that Fick's laws cannot, such as uphill diffusion and phase separation.
 
