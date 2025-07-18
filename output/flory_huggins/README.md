@@ -10,7 +10,7 @@ The mixing term is split into an ideal (entropic) part and an excess (interactio
 
 $$ \Delta G_{mix} = \Delta G_{ideal} + \Delta G_{excess} $$
 
-For an ideal solution, only the entropic term exists, leading to Fickian diffusion. To model interactions, we use the **regular solution model**, which adds an excess energy term:
+For an ideal solution, only the entropic term exists, leading to Fickian diffusion. To model interactions, we use the **regular solution model**, a simplified form of the Flory-Huggins theory, which adds an excess energy term:
 
 $$ \Delta G_{excess} = \Omega c_1 c_2 $$
 
