@@ -34,3 +34,38 @@ When the repulsive interaction term is strong enough (i.e., a large positive `Ω
 The following animation demonstrates this effect. For a high interaction parameter (`Ω=6000`), an initially homogeneous mixture rapidly separates into regions rich in one species or the other.
 
 ![Spontaneous Phase Separation](../../assets/spontaneous_phase_separation_Omega6000.gif)
+
+## Finite Element Formulation
+
+The governing dynamics are described by the Cahn-Hilliard equation (omiting the fourth order smoothing term):
+
+$$ \frac{\partial c}{\partial t} = \nabla \cdot (M c \nabla \mu) $$
+
+To properly formulate this for the Finite Element Method (FEM), we can split the chemical potential `μ` into its ideal (entropic) and excess (interaction) parts: `μ = μ_ideal + μ_excess`.
+
+$$ \mu_{ideal} = RT(\ln(c) - \ln(1-c)) \quad \implies \quad M c \nabla \mu_{ideal} \approx D \nabla c $$
+$$ \mu_{excess} = \Omega(1-2c) $$
+
+The PDE can then be written as:
+
+$$ \frac{\partial c}{\partial t} = \nabla \cdot (D \nabla c) + \nabla \cdot (M c \nabla \mu_{excess}) $$
+
+This separates the linear Fickian diffusion from the non-linear part driven by chemical interactions. We derive the weak form by multiplying by a test function `v`, integrating over the domain `Ω`, and applying integration by parts:
+
+$$ \int_{\Omega} \frac{\partial c}{\partial t} v \, d\Omega = - \int_{\Omega} D (\nabla c \cdot \nabla v) \, d\Omega - \int_{\Omega} M c (\nabla \mu_{excess} \cdot \nabla v) \, d\Omega $$
+
+Next, we discretize in space using basis functions `φ_j` ($ c \approx \sum c_j \phi_j $) and the Galerkin method (`v = φ_i`). This yields a system of ordinary differential equations (ODEs):
+
+$$ M \frac{d\mathbf{c}}{dt} + K \mathbf{c} + \mathbf{F}(\mathbf{c}) = 0 $$
+
+Where:
+- **c** is the vector of nodal concentration values `c_j`.
+- **M** is the mass matrix: $ M_{ij} = \int_{\Omega} \phi_i \phi_j \, d\Omega $.
+- **K** is the stiffness matrix from the ideal diffusion part: $ K_{ij} = \int_{\Omega} D (\nabla \phi_i \cdot \nabla \phi_j) \, d\Omega $.
+- **F(c)** is the non-linear force vector from the interaction potential: $ F_i(\mathbf{c}) = \int_{\Omega} M c_h (\nabla \mu_{excess}(\mathbf{c}) \cdot \nabla \phi_i) \, d\Omega $.
+
+Finally, we discretize in time using the implicit Euler method:
+
+$$ M \frac{\mathbf{c}^{n+1} - \mathbf{c}^n}{\Delta t} + K \mathbf{c}^{n+1} + \mathbf{F}(\mathbf{c}^{n+1}) = 0 $$
+
+This gives a non-linear system of equations to be solved at each time step, typically with a Newton-Raphson method.
