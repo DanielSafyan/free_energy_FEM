@@ -32,6 +32,10 @@ class TriangularMesh:
         """Returns the number of nodes in the mesh.""" 
         return len(self.nodes)
 
+    def num_cells(self):
+        """Returns the number of cells in the mesh."""
+        return len(self.elements)
+
     def get_cells(self):
         """Returns an iterator over the element indices."""
         return range(len(self.elements))
@@ -55,6 +59,23 @@ class TriangularMesh:
         grad_phi_i = grads[i]
         grad_phi_j = grads[j]
         return area * np.dot(grad_phi_i, grad_phi_j)
+
+    def integrate_convection_term(self, cell_idx, i, j, phi_on_cell):
+        """Computes integral of (grad(phi_i) . grad(phi)) * phi_j over a cell."""
+        area = self._element_data[cell_idx]['area']
+        grads = self._element_data[cell_idx]['grads']
+        
+        # grad(phi) is constant over the element
+        grad_phi_cell = np.dot(grads.T, phi_on_cell)
+        
+        # grad(phi_i) is constant over the element
+        grad_phi_i = grads[i]
+        
+        # The integral of phi_j over the element is area / 3
+        integral_phi_j = area / 3.0
+        
+        # Since grad(phi_i) and grad(phi) are constant, the integral is simple:
+        return np.dot(grad_phi_i, grad_phi_cell) * integral_phi_j
 
     def gradient(self, c):
         """Computes the gradient of a field c at the nodes (piecewise constant)."""
@@ -84,6 +105,32 @@ class TriangularMesh:
                 force_vector[node_idx] += area * np.dot(avg_force, self._element_data[i]['grads'][j])
         return force_vector
 
+    def assemble_coupling_matrix(self, coefficient):
+        """
+        Assembles a stiffness-like matrix with a spatially varying coefficient.
+        Matrix entry is integral(coeff * grad(phi_i) . grad(phi_j)) dV.
+        The coefficient is approximated as piecewise constant over each element.
+        """
+        from scipy.sparse import lil_matrix, csc_matrix
+        num_nodes = self.num_nodes()
+        K = lil_matrix((num_nodes, num_nodes))
+
+        for cell_idx in range(len(self.elements)):
+            nodes = self.get_nodes_for_cell(cell_idx)
+            
+            # Approximate coefficient as constant over the element by averaging nodal values
+            coeff_local = coefficient[nodes]
+            coeff_avg = np.mean(coeff_local)
+
+            for i in range(len(nodes)):
+                for j in range(len(nodes)):
+                    # Get pre-computed integral of grad(phi_i) . grad(phi_j)
+                    grad_integral = self.integrate_grad_phi_i_grad_phi_j(cell_idx, i, j)
+                    
+                    # Add contribution to the matrix
+                    K[nodes[i], nodes[j]] += coeff_avg * grad_integral
+
+        return csc_matrix(K)
 
 
 def create_structured_mesh(Lx=1.0, Ly=1.0, nx=20, ny=20):
@@ -93,7 +140,14 @@ def create_structured_mesh(Lx=1.0, Ly=1.0, nx=20, ny=20):
     x_grid, y_grid = np.meshgrid(x, y)
     
     nodes = np.vstack([x_grid.ravel(), y_grid.ravel()]).T
+
+    # print("x_grid shape: ", x_grid.shape)
+
+    print("Shapes: ", np.where(x_grid == 0)[0].shape, np.where(np.isclose(nodes[:, 0], Lx-Lx/(nx+1), atol = Lx/(2*nx)))[0].shape)
+
+    boundary_nodes = np.array([np.where(x_grid == 0)[0], np.where(np.isclose(x_grid, Lx, atol = Lx/(nx+1)))[0], np.where(y_grid == 0)[0], np.where(np.isclose(y_grid, Ly, atol = Ly/(ny+1)))[0]])
     
+
     elements = []
     for j in range(ny):
         for i in range(nx):
@@ -104,4 +158,4 @@ def create_structured_mesh(Lx=1.0, Ly=1.0, nx=20, ny=20):
             elements.append([n1, n2, n4])
             elements.append([n1, n4, n3])
             
-    return nodes, np.array(elements)
+    return nodes, np.array(elements), boundary_nodes

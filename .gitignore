@@ -17,3 +17,5 @@ ipython_config.py
 !output/README.md
 *.png
 *.npz
+*.h5
+*.xdmf
