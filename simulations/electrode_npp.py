@@ -76,7 +76,7 @@ if __name__ == "__main__":
     from utils.temporal_voltages import NPhasesVoltage
 
     # 1. Simulation Setup
-    nx, ny = 30, 30
+    nx, ny = 20, 20
     Lx, Ly = 1.0, 1.0
     nodes, elements, boundary_nodes = create_structured_mesh(Lx=Lx, Ly=Ly, nx=nx, ny=ny)
     mesh = TriangularMesh(nodes, elements)
@@ -100,8 +100,8 @@ if __name__ == "__main__":
     c0 = 1.0  # mol/m^3
     L_c = 1e-7  # Characteristic length
 
-    dt = 1e-14
-    num_steps = 100
+    dt = 1e-10
+    num_steps = 20
 
     # Judge numerical stability
     l_debye = np.sqrt(epsilon * R * T / (F**2 * c0))
@@ -132,19 +132,28 @@ if __name__ == "__main__":
 
     # Define or read the temporal voltage 
     voltage = None
-    option = "22phase"
+    option = "test neighbor electrodes"
     if option == "sine":
         voltage = [SineVoltage(node_index=10, period_length=num_steps, time_length=num_steps, amplitude=applied_voltage)]
     elif option == "22phase":
         voltage = [NPhasesVoltage(node_index=10, voltage_values=[applied_voltage, -applied_voltage], duration=num_steps),
                    NPhasesVoltage(node_index=300, voltage_values=[-applied_voltage, applied_voltage], duration=num_steps)]
+    elif option == "test neighbor electrodes":
+
+        sensing_electrode1 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + 3*nx//4, voltage_values=[applied_voltage/10.0], duration=num_steps)
+        sensing_electrode2 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//4) + 3*nx//4, voltage_values=[0.0], duration=num_steps)
+        
+        stimulating_electrode1 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + nx//4, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps)
+        stimulating_electrode2 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//4) + nx//4, voltage_values=[0.0, np.nan, 0.0], duration=num_steps)
+        
+        voltage = [sensing_electrode1, sensing_electrode2, stimulating_electrode1, stimulating_electrode2]
 
 
-    print("time sequence: ", voltage[0].time_sequence)
+    print("time sequence: ", voltage[2].time_sequence)
 
 
     # 5. Set Initial Conditions (Dimensionless)
-    experiment = "gaussian"  # Options: "random", "gaussian", "two_blocks"
+    experiment = "random"  # Options: "random", "gaussian", "two_blocks"
 
     # Set initial conditions (dimensionless fractions)
     # Initial condition for the neutral species, c3. Let's make it uniform.
@@ -164,7 +173,7 @@ if __name__ == "__main__":
         c1_initial_dim = np.convolve(c1_initial_dim, np.ones(5)/5, mode='same')
         c2_initial_dim = 1.0 - c3_initial_dim - c1_initial_dim
     elif experiment == "random":
-        c1_initial_dim = 0.05 + np.random.uniform(-0.01, 0.01, mesh.num_nodes())
+        c1_initial_dim = 0.05 + np.random.uniform(-0.02, 0.02, mesh.num_nodes())
         c2_initial_dim = 1.0 - c3_initial_dim - c1_initial_dim
     elif experiment == "plus":
         c3_initial_dim = np.full(mesh.num_nodes(), 0.9)
@@ -189,7 +198,7 @@ if __name__ == "__main__":
     # save history
     save_history(history, mesh, L_c, sim.tau_c, sim.phi_c, dt, num_steps)
 
-    plotting = False
+    plotting = True
     if plotting:
         plot_history(file_path= "output/electrode_npp_results.npz")
     

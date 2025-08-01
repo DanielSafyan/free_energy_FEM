@@ -322,6 +322,8 @@ class NernstPlanckPoissonSimulation:
             # Apply voltage on the boundary
             if applied_voltages is not None:
                 for voltage in applied_voltages:
+                    if np.isnan(voltage.time_sequence[step]):
+                        continue
                     jacobian, residual = \
                         self._apply_one_node_electrode(jacobian, residual, phi, voltage.time_sequence[step]/self.phi_c, voltage.node_index)
             else:

@@ -11,7 +11,7 @@ This project aims to reproduce the experiments described in the paper "Electro-a
 
 The project is structured as follows:
 
-- `output`: Contains README.md files that include mathematical introductions and derivations of the simulation models. These files also try toputting everything into an overarching principle namely the free energy.
+- `output`: Contains README.md files that include mathematical introductions and derivations of the simulation models. These files also try to put everything into an overarching principle namely the free energy.
 - `assets`: Contains gifs of simulation results.   
 
 - `simulations`: Contains the simulation code.
