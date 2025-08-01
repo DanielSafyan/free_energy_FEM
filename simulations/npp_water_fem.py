@@ -12,18 +12,18 @@
 
 """
 import matplotlib.pyplot as plt
-from matplotlib.collections import PolyCollection
 
 import numpy as np
 import os
-from scipy.sparse import lil_matrix, csc_matrix, hstack, vstack, eye
+from scipy.sparse import lil_matrix, csc_matrix, hstack, vstack
 from scipy.sparse.linalg import spsolve, norm
 from tqdm import tqdm
 from utils.fem_mesh import TriangularMesh
 
 class NernstPlanckPoissonSimulation:
     def __init__(self, mesh, dt, D1, D2, D3, z1, z2, epsilon, R, T, 
-                 L_c, c0, voltage=0.0, alpha=1.0, alpha_phi=1.0, chemical_potential_terms=None, boundary_nodes=None):
+                 L_c, c0, voltage=0.0, alpha=1.0, alpha_phi=1.0, chemical_potential_terms=None, boundary_nodes=None, 
+                 temporal_voltages = None):
         self.mesh = mesh
         self.F = 96485.33212  # Faraday's constant
 
@@ -36,6 +36,7 @@ class NernstPlanckPoissonSimulation:
 
         # Dimensionless parameters
         self.dt_dim = dt / self.tau_c
+        print("dt_dim: ", self.dt_dim)
         self.D1_dim = D1 / self.D_c if self.D_c > 0 else 0
         self.D2_dim = D2 / self.D_c if self.D_c > 0 else 0
         self.D3_dim = D3 / self.D_c if self.D_c > 0 else 0 # Diffusion for neutral species
@@ -76,6 +77,10 @@ class NernstPlanckPoissonSimulation:
             print("Boundary nodes shape: ", self.left_boundary_nodes.shape, self.right_boundary_nodes.shape)
 
 
+        if temporal_voltages is not None:
+            self.temporal_voltages = temporal_voltages
+
+
     def _assemble_constant_matrices(self):
         """Assembles the mass and stiffness matrices which are constant over time."""
         M = lil_matrix((self.num_nodes, self.num_nodes))
@@ -93,6 +98,12 @@ class NernstPlanckPoissonSimulation:
 
         self.M_mat = csc_matrix(M)
         self.K_mat = csc_matrix(K)
+
+        print(f"Norm of Mass Matrix: {norm(self.M_mat)}")
+        print(f"Norm of Stiffness Matrix: {norm(self.K_mat)}")
+        if norm(self.M_mat) < 1e-15:
+            print("!!! WARNING: Mass matrix appears to be zero. Time-stepping will not work.")
+
 
     def _assemble_convection_matrix(self, phi, prefactor):
         """Assembles the convection matrix for the term integral( (grad(v_i).grad(phi)) * v_j )."""
@@ -188,11 +199,11 @@ class NernstPlanckPoissonSimulation:
 
         Residual = np.concatenate([R1, R2, R3, R_phi])
 
-        print(" Norms of residuals ", np.linalg.norm(R1), np.linalg.norm(R3), np.linalg.norm(R_phi))
+        #print(" Norms of residuals ", np.linalg.norm(R1), np.linalg.norm(R3), np.linalg.norm(R_phi))
         
         return Residual, Jacobian
         
-    def _apply_voltage_bc(self, jacobian, residual, phi):
+    def _apply_boundary_voltage(self, jacobian, residual, phi):
         """
         --- Applies Dirichlet boundary conditions for voltage ---
         Modifies the Jacobian and Residual to enforce fixed potential on boundaries.
@@ -204,6 +215,7 @@ class NernstPlanckPoissonSimulation:
         
         
         # Apply BC for left boundary (phi = 0)
+
         for node_idx in self.left_boundary_nodes:
             dof_idx = phi_dof_offset + node_idx
             # Modify Jacobian: zero out the row and set diagonal to 1
@@ -213,6 +225,7 @@ class NernstPlanckPoissonSimulation:
             residual[dof_idx] = phi[node_idx] - 0.0 # V_left = 0
 
         # Apply BC for right boundary (phi = V_applied)
+
         for node_idx in self.right_boundary_nodes:
             dof_idx = phi_dof_offset + node_idx
             # Modify Jacobian
@@ -222,8 +235,36 @@ class NernstPlanckPoissonSimulation:
             residual[dof_idx] = phi[node_idx] - self.voltage_dim
 
         return jacobian.tocsc(), residual
+    
+    def apply_vertex_voltage(self, jacobian, residual, phi):
+        jacobian2, residual2 = self._apply_one_node_electrode(jacobian, residual, phi, 0.0, self.left_boundary_nodes[0])
+        jacobian3, residual3 = self._apply_one_node_electrode(jacobian2, residual2, phi, self.voltage_dim, self.right_boundary_nodes[0])
+        return jacobian3, residual3
+    
+    def _apply_one_node_electrode(self, jacobian, residual, phi, applied_voltage, node_idx):
 
-    def run(self, c1_initial, c2_initial, c3_initial, phi_initial, num_steps,rtol = 0.5,atol = 1e-14, max_iter=50):
+        """
+        --- Applies Dirichlet boundary conditions for voltage ---
+            Only one node per side is applied a voltage instead of the whole side
+        """
+        
+        jacobian = jacobian.tolil()
+
+        # The potential (phi) is the 4th variable, so its DOFs start at 3 * num_nodes
+        phi_dof_offset = 3 * self.num_nodes
+
+
+        dof_idx = phi_dof_offset + node_idx
+        # Modify Jacobian: zero out the row and set diagonal to 1
+        jacobian[dof_idx, :] = 0
+        jacobian[dof_idx, dof_idx] = 1
+        # Modify Residual: set to current value minus target value
+        residual[dof_idx] = phi[node_idx] - applied_voltage
+
+        return jacobian.tocsc(), residual
+
+
+    def run(self, c1_initial, c2_initial, c3_initial, phi_initial, num_steps,rtol = 1e-3,atol = 1e-14, max_iter=50):
         c1, c2, c3, phi = c1_initial.copy(), c2_initial.copy(), c3_initial.copy(), phi_initial.copy()
         history = [(c1.copy(), c2.copy(), c3.copy(), phi.copy())]
 
@@ -237,7 +278,7 @@ class NernstPlanckPoissonSimulation:
                 residual, jacobian = self._assemble_residual_and_jacobian(c1, c2, c3, phi, c1_prev, c2_prev, c3_prev)
                 
                 # Apply voltage on the boundary
-                jacobian, residual = self._apply_voltage_bc(jacobian, residual, phi)
+                jacobian, residual = self.apply_vertex_voltage(jacobian, residual, phi)
                 
                 norm_res = np.linalg.norm(residual)
                 norms.append(norm_res)
@@ -255,27 +296,71 @@ class NernstPlanckPoissonSimulation:
                 c3 += self.alpha * delta[2 * self.num_nodes : 3 * self.num_nodes]
                 phi += self.alpha_phi * delta[3 * self.num_nodes : 4 * self.num_nodes]
                 
-                print(f"Norms of Delta's components: {np.linalg.norm(delta[0 * self.num_nodes : 1 * self.num_nodes])}, {np.linalg.norm(delta[2 * self.num_nodes : 3 * self.num_nodes])},{np.linalg.norm(delta[3 * self.num_nodes : 4 * self.num_nodes])}")
+                # print(f"Norms of Delta's components: {np.linalg.norm(delta[0 * self.num_nodes : 1 * self.num_nodes])}, {np.linalg.norm(delta[2 * self.num_nodes : 3 * self.num_nodes])},{np.linalg.norm(delta[3 * self.num_nodes : 4 * self.num_nodes])}")
 
             if i == max_iter - 1:
                 print("Did not converge")
                 print("Residual:", np.min(norms))
                 raise Exception("Did not converge")
             
-            # amount of change in current time step in a green color
-            print(f"Amount of c1 change in time step {step}: {np.linalg.norm(c1 - c1_prev)}")
-            print(f"Amount of c2 change in time step {step}: {np.linalg.norm(c2 - c2_prev)}")
+            print(f"Amount of c1 change in c1 in time step {step}: {np.linalg.norm(c1 - c1_prev)}")
+            print(f"Amount of c2 change in c2 in time step {step}: {np.linalg.norm(c2 - c2_prev)}")
             
             history.append((c1.copy(), c2.copy(), c3.copy(), phi.copy()))
 
-        return history
+        return history 
+    
+    def step(self, c1_initial, c2_initial, c3_initial, phi_initial, applied_voltages, step,
+     rtol = 1e-3,atol = 1e-14, max_iter=50):
+        c1, c2, c3, phi = c1_initial.copy(), c2_initial.copy(), c3_initial.copy(), phi_initial.copy()
+
+        initial_residual_norm = -1.0
+        
+        for i in range(max_iter):
+            residual, jacobian = self._assemble_residual_and_jacobian(c1, c2, c3, phi, c1_initial, c2_initial, c3_initial)
+            
+            # Apply voltage on the boundary
+            if applied_voltages is not None:
+                for voltage in applied_voltages:
+                    jacobian, residual = \
+                        self._apply_one_node_electrode(jacobian, residual, phi, voltage.time_sequence[step]/self.phi_c, voltage.node_index)
+            else:
+                jacobian, residual = self.apply_vertex_voltage(jacobian, residual, phi)
+            
+            norm_res = np.linalg.norm(residual)
+            
+            if i == 0:
+                initial_residual_norm = norm_res if norm_res > 0 else 1.0
+                
+            if norm_res < (initial_residual_norm * rtol) + atol:
+                # print("Converged in", i, "iterations")
+                break
+            
+            delta = spsolve(jacobian, -residual)
+            c1 += self.alpha * delta[0 * self.num_nodes : 1 * self.num_nodes]
+            c2 += self.alpha * delta[1 * self.num_nodes : 2 * self.num_nodes]
+            c3 += self.alpha * delta[2 * self.num_nodes : 3 * self.num_nodes]
+            phi += self.alpha_phi * delta[3 * self.num_nodes : 4 * self.num_nodes]
+        
+        if max_iter <=  i - 1:
+            raise Exception("Did not converge")
+        print(f"Amount of change in c1: {np.linalg.norm(c1 - c1_initial)}")
+        print(f"Amount of change in c2: {np.linalg.norm(c2 - c2_initial)}")
+        print(f"Amount of change in phi: {np.linalg.norm(phi - phi_initial)}")
+
+        
+        return c1, c2, c3, phi
+            
+            # print(f"Norms of Delta's components: {np.linalg.norm(delta[0 * self.num_nodes : 1 * self.num_nodes])}, {np.linalg.norm(delta[2 * self.num_nodes : 3 * self.num_nodes])},{np.linalg.norm(delta[3 * self.num_nodes : 4 * self.num_nodes])}")
+        
+
 
 if __name__ == '__main__':
     from utils.fem_mesh import create_structured_mesh 
 
     # 1. Simulation Setup
     nx, ny = 30, 30
-    Lx, Ly = 1.0e-7, 1.0e-7
+    Lx, Ly = 1.0, 1.0
     nodes, elements, boundary_nodes = create_structured_mesh(Lx=Lx, Ly=Ly, nx=nx, ny=ny)
     mesh = TriangularMesh(nodes, elements)
 
@@ -286,19 +371,19 @@ if __name__ == '__main__':
     epsilon = 80 * 8.854e-12
     D1 = 1e-9
     D2 = 1e-9
-    D3 = 1e-12 # Diffusion coefficient for the neutral species
+    D3 = 1e-9 # Diffusion coefficient for the neutral species
     z1 = 1
     z2 = -1
     chi = 0 # No Flory-Huggins interaction
     
     # --- Define the applied voltage ---
-    applied_voltage = 1e-4  # Volts
+    applied_voltage = 1e-3  # Volts
 
     # Characteristic scales
     c0 = 1.0  # mol/m^3
-    L_c = Lx  # Characteristic length
+    L_c = 1e-7  # Characteristic length
 
-    dt = 1e-13
+    dt = 1e-8
     num_steps = 10
 
     # Judge numerical stability
@@ -308,6 +393,10 @@ if __name__ == '__main__':
         print(f"Warning: dt is too large. dt_max = {dt_max}")
     print(f"debye length = {l_debye}, dt_max = {dt_max}")
     print(f"thermal voltage = {R*T/F}")
+
+    # Characteristic time scale
+    print(f"Characteristic diffusion time = {L_c**2 / D1}")
+    print(f"Characteristic convection time = {L_c / (z1 * F * c0)}")
 
     # 3. Define non-ideal chemical potential terms (optional)
     chemical_potential_terms = []
@@ -319,9 +408,9 @@ if __name__ == '__main__':
     sim = NernstPlanckPoissonSimulation(
         mesh, dt, D1, D2, D3, z1, z2, epsilon, R, T, L_c, c0,
         voltage=applied_voltage, 
-        alpha=0.1, alpha_phi=0.05, 
+        alpha=0.5, alpha_phi=0.5, 
         chemical_potential_terms=chemical_potential_terms,
-        boundary_nodes=None
+        boundary_nodes=boundary_nodes
     )
 
     # 5. Set Initial Conditions (Dimensionless)
@@ -368,7 +457,7 @@ if __name__ == '__main__':
         rhs_poisson -= A_poisson[:, node_idx].toarray().flatten() * 0.0
         A_poisson[node_idx, :] = 0
         A_poisson[node_idx, node_idx] = 1
-        rhs_poisson[node_idx] = 0.0
+        rhs_poisson[node_idx] = 0.0 
     
     # Right boundary (phi = V_applied)
     for node_idx in sim.right_boundary_nodes:

@@ -95,7 +95,6 @@ class TriangularMesh:
         """Assembles a force vector by integrating a force field over the mesh."""
         force_vector = np.zeros(self.num_nodes())
         # This is a simplification. A proper implementation would use quadrature.
-        # Here, we assume the force_field is evaluated at nodes and interpolate.
         for i, element_nodes in enumerate(self.elements):
             area = self._element_data[i]['area']
             # Average force over the element nodes
@@ -137,16 +136,22 @@ def create_structured_mesh(Lx=1.0, Ly=1.0, nx=20, ny=20):
     """Creates a structured mesh of triangular elements on a rectangle."""
     x = np.linspace(0, Lx, nx + 1)
     y = np.linspace(0, Ly, ny + 1)
-    x_grid, y_grid = np.meshgrid(x, y)
+
+    id_x = np.arange(nx+1)
+    id_y = np.arange(ny+1)
+
+    id_grid_x, id_grid_y = np.meshgrid(id_x, id_y)
+    x_grid, y_grid = np.meshgrid(x, y)  # 31x31 grid with x/y coordinates
+    #print("id_grid_x: ", id_grid_x[1])
     
+    id_nodes = np.vstack([id_grid_x.ravel(), id_grid_y.ravel()]).T
     nodes = np.vstack([x_grid.ravel(), y_grid.ravel()]).T
 
-    # print("x_grid shape: ", x_grid.shape)
-
-    print("Shapes: ", np.where(x_grid == 0)[0].shape, np.where(np.isclose(nodes[:, 0], Lx-Lx/(nx+1), atol = Lx/(2*nx)))[0].shape)
-
-    boundary_nodes = np.array([np.where(x_grid == 0)[0], np.where(np.isclose(x_grid, Lx, atol = Lx/(nx+1)))[0], np.where(y_grid == 0)[0], np.where(np.isclose(y_grid, Ly, atol = Ly/(ny+1)))[0]])
     
+    left = np.where(id_nodes[:, 0] == 0)[0]
+    #print("left shape: ", left.shape)
+    right = np.where(id_nodes[:, 0] == nx)[0]
+    #print("right shape: ", right.shape)
 
     elements = []
     for j in range(ny):
@@ -158,4 +163,4 @@ def create_structured_mesh(Lx=1.0, Ly=1.0, nx=20, ny=20):
             elements.append([n1, n2, n4])
             elements.append([n1, n4, n3])
             
-    return nodes, np.array(elements), boundary_nodes
+    return nodes, np.array(elements), (left, right)
