@@ -6,11 +6,11 @@ import os
 from tqdm import tqdm
 
 
-def save_history(history, mesh, L_c, tau_c, phi_c, dt, num_steps, file_path= "output/electrode_npp_results.npz"):
+def save_history(history, mesh, L_c, tau_c, phi_c, dt, num_steps,constants, file_path= "output/electrode_npp_results.npz"):
     c1_history = np.array([c1 for c1, c2, c3, phi in history])
     c2_history = np.array([c2 for c1, c2, c3, phi in history])
     c3_history = np.array([c3 for c1, c2, c3, phi in history])
-    phi_history = sim.phi_c * np.array([phi for c1, c2, c3, phi in history])
+    phi_history = phi_c * np.array([phi for c1, c2, c3, phi in history])
 
     print("length of the history: ", len(history))
 
@@ -25,7 +25,9 @@ def save_history(history, mesh, L_c, tau_c, phi_c, dt, num_steps, file_path= "ou
              num_steps=num_steps,
              L_c=L_c,
              tau_c=tau_c,
-             phi_c=phi_c)
+             phi_c=phi_c,
+             constants=constants)
+
     print("Saved history to ", file_path)
     
 def plot_history(file_path= "output/electrode_npp_results.npz"):
@@ -74,6 +76,7 @@ def plot_history(file_path= "output/electrode_npp_results.npz"):
 if __name__ == "__main__":
     from utils.fem_mesh import create_structured_mesh 
     from utils.temporal_voltages import NPhasesVoltage
+    from simulations.NPPwithFOReaction import NPPwithFOReaction
 
     # 1. Simulation Setup
     nx, ny = 20, 20
@@ -101,7 +104,7 @@ if __name__ == "__main__":
     L_c = 1e-7  # Characteristic length
 
     dt = 1e-10
-    num_steps = 20
+    num_steps = 400
 
     # Judge numerical stability
     l_debye = np.sqrt(epsilon * R * T / (F**2 * c0))
@@ -119,7 +122,7 @@ if __name__ == "__main__":
     chemical_potential_terms = []
     
     # 4. Create simulation instance
-    sim = NernstPlanckPoissonSimulation(
+    sim = NPPwithFOReaction(
         mesh, dt, D1, D2, D3, z1, z2, epsilon, R, T, L_c, c0,
         voltage=applied_voltage, 
         alpha=0.5, alpha_phi=0.5, 
@@ -140,16 +143,22 @@ if __name__ == "__main__":
                    NPhasesVoltage(node_index=300, voltage_values=[-applied_voltage, applied_voltage], duration=num_steps)]
     elif option == "test neighbor electrodes":
 
-        sensing_electrode1 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + 3*nx//4, voltage_values=[applied_voltage/10.0], duration=num_steps)
+        sensing_electrode1 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + 3*nx//4, voltage_values=[applied_voltage/100.0], duration=num_steps)
         sensing_electrode2 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//4) + 3*nx//4, voltage_values=[0.0], duration=num_steps)
         
-        stimulating_electrode1 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + nx//4, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps)
-        stimulating_electrode2 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//4) + nx//4, voltage_values=[0.0, np.nan, 0.0], duration=num_steps)
+        stimulating_electrode1 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + nx//4, voltage_values=[np.nan,applied_voltage, np.nan, applied_voltage], duration=num_steps)
+        stimulating_electrode2 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//4) + nx//4, voltage_values=[np.nan,0.0, np.nan, 0.0], duration=num_steps)
         
         voltage = [sensing_electrode1, sensing_electrode2, stimulating_electrode1, stimulating_electrode2]
+    elif option == "nan":
+        # This is numerically very unstable
+        voltage = [NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + nx//4, voltage_values=[np.nan], duration=num_steps)]
+    elif option == "small":
+        # This is numerically very unstable
+        voltage = [NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + 3*nx//4, voltage_values=[applied_voltage/100.0], duration=num_steps), 
+                   NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + nx//4, voltage_values=[-applied_voltage/100.0], duration=num_steps)]
 
 
-    print("time sequence: ", voltage[2].time_sequence)
 
 
     # 5. Set Initial Conditions (Dimensionless)
@@ -173,7 +182,8 @@ if __name__ == "__main__":
         c1_initial_dim = np.convolve(c1_initial_dim, np.ones(5)/5, mode='same')
         c2_initial_dim = 1.0 - c3_initial_dim - c1_initial_dim
     elif experiment == "random":
-        c1_initial_dim = 0.05 + np.random.uniform(-0.02, 0.02, mesh.num_nodes())
+        c3_initial_dim = np.full(mesh.num_nodes(), 0.5)
+        c1_initial_dim = 0.35 + np.random.uniform(-0.1, 0.1, mesh.num_nodes())
         c2_initial_dim = 1.0 - c3_initial_dim - c1_initial_dim
     elif experiment == "plus":
         c3_initial_dim = np.full(mesh.num_nodes(), 0.9)
@@ -192,13 +202,26 @@ if __name__ == "__main__":
     for step in tqdm(range(num_steps), desc="Simulation Progress"):
         c1_prev, c2_prev, c3_prev = c1.copy(), c2.copy(), c3.copy()
 
-        c1, c2, c3, phi = sim.step(c1_prev, c2_prev, c3_prev, phi, voltage, step)
+        c1, c2, c3, phi = sim.step(c1_prev, c2_prev, c3_prev, phi, voltage, step, k_reaction=1.5)
         history.append((c1.copy(), c2.copy(), c3.copy(), phi.copy()))
     
     # save history
-    save_history(history, mesh, L_c, sim.tau_c, sim.phi_c, dt, num_steps)
+    physical_constants = {
+        "R": R,
+        "T": T,
+        "F": F,
+        "epsilon": epsilon,
+        "D1": D1,
+        "D2": D2,
+        "D3": D3,
+        "z1": z1,
+        "z2": z2,
+        "chi": chi,
+        "c0": c0
+    }
+    save_history(history, mesh, L_c, sim.tau_c, sim.phi_c, dt, num_steps, physical_constants)
 
-    plotting = True
+    plotting = False
     if plotting:
         plot_history(file_path= "output/electrode_npp_results.npz")
     
