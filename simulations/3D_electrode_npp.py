@@ -140,25 +140,69 @@ if __name__ == "__main__":
     )
 
     # 4. Define Electrode Placement in 3D
-
-    stimulating_electrode1_idx = get_node_idx(nx//4, ny//4, 0)
-    stimulating_electrode2_idx = get_node_idx(nx//4, ny//4, nz)
     
-    sensing_electrode1_idx = get_node_idx(nx//2, ny//4, 0)
-    sensing_electrode2_idx = get_node_idx(nx//2, ny//4, nz)
+    electrode_configuration = "pong game"
+    if electrode_configuration == "left right stimulation":
+        stimulating_electrode1_idx = get_node_idx(nx//4, ny//4, 0)
+        stimulating_electrode2_idx = get_node_idx(nx//4, ny//4, nz)
+        
+        sensing_electrode1_idx = get_node_idx(nx//2, ny//4, 0)
+        sensing_electrode2_idx = get_node_idx(nx//2, ny//4, nz)
 
-    stimulating_electrode3_idx = get_node_idx(3*nx//4, ny//4, 0)
-    stimulating_electrode4_idx = get_node_idx(3*nx//4, ny//4, nz)
+        stimulating_electrode3_idx = get_node_idx(3*nx//4, ny//4, 0)
+        stimulating_electrode4_idx = get_node_idx(3*nx//4, ny//4, nz)
     
 
-    voltage = [
-        NPhasesVoltage(node_index=stimulating_electrode1_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
-        NPhasesVoltage(node_index=stimulating_electrode2_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
-        NPhasesVoltage(node_index=sensing_electrode1_idx, voltage_values=[applied_voltage / 10.0], duration=num_steps),
-        NPhasesVoltage(node_index=sensing_electrode2_idx, voltage_values=[0.0], duration=num_steps),
-        NPhasesVoltage(node_index=stimulating_electrode3_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
-        NPhasesVoltage(node_index=stimulating_electrode4_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
-    ]
+        voltage = [
+            NPhasesVoltage(node_index=stimulating_electrode1_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode2_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
+            NPhasesVoltage(node_index=sensing_electrode1_idx, voltage_values=[applied_voltage / 10.0], duration=num_steps),
+            NPhasesVoltage(node_index=sensing_electrode2_idx, voltage_values=[0.0], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode3_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode4_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
+        ]
+    elif electrode_configuration == "pong game":
+        # 3 sensing electrode pairs in the lower row at y = ny//4
+        sensing_electrode11_idx = get_node_idx(nx//4, ny//4, 0)
+        sensing_electrode12_idx = get_node_idx(nx//4, ny//4, nz)
+        sensing_electrode21_idx = get_node_idx(3*nx//4, ny//4, 0)
+        sensing_electrode22_idx = get_node_idx(3*nx//4, ny//4, nz)
+        sensing_electrode31_idx = get_node_idx(2*nx//4, ny//4, 0)
+        sensing_electrode32_idx = get_node_idx(2*nx//4, ny//4, nz)
+
+        # 3 stimulating electrode pairs in the middle row at y = 2*ny//4
+        stimulating_electrode11_idx = get_node_idx(nx//4, 2*ny//4, 0)
+        stimulating_electrode12_idx = get_node_idx(nx//4, 2*ny//4, nz)
+        stimulating_electrode21_idx = get_node_idx(3*nx//4, 2*ny//4, 0)
+        stimulating_electrode22_idx = get_node_idx(3*nx//4, 2*ny//4, nz)
+        stimulating_electrode31_idx = get_node_idx(2*nx//4, 2*ny//4, 0)
+        stimulating_electrode32_idx = get_node_idx(2*nx//4, 2*ny//4, nz)
+
+        # 3 stimulating electrode pairs in the upper row at y = 3*ny//4
+        # stimulating_electrode41_idx = get_node_idx(nx//4, 3*ny//4, 0)
+        # stimulating_electrode42_idx = get_node_idx(nx//4, 3*ny//4, nz)
+        # stimulating_electrode51_idx = get_node_idx(3*nx//4, 3*ny//4, 0)
+        # stimulating_electrode52_idx = get_node_idx(3*nx//4, 3*ny//4, nz)
+        # stimulating_electrode61_idx = get_node_idx(2*nx//4, 3*ny//4, 0)
+        # stimulating_electrode62_idx = get_node_idx(2*nx//4, 3*ny//4, nz)
+
+        voltage = [
+            NPhasesVoltage(node_index=sensing_electrode11_idx, voltage_values=[applied_voltage / 10.0], duration=num_steps),
+            NPhasesVoltage(node_index=sensing_electrode12_idx, voltage_values=[0.0], duration=num_steps),
+            NPhasesVoltage(node_index=sensing_electrode21_idx, voltage_values=[applied_voltage / 10.0], duration=num_steps),
+            NPhasesVoltage(node_index=sensing_electrode22_idx, voltage_values=[0.0], duration=num_steps),
+            NPhasesVoltage(node_index=sensing_electrode31_idx, voltage_values=[applied_voltage / 10.0], duration=num_steps),
+            NPhasesVoltage(node_index=sensing_electrode32_idx, voltage_values=[0.0], duration=num_steps),
+
+            NPhasesVoltage(node_index=stimulating_electrode11_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode12_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode21_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode22_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode31_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode32_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
+            ]
+
+        
 
     # 5. Set Initial Conditions (3D)
     experiment = "gaussian"  # Options: "random", "gaussian", "two_blocks"
@@ -203,7 +247,7 @@ if __name__ == "__main__":
     save_history(history, mesh, L_c, sim.tau_c, sim.phi_c, dt, num_steps, physical_constants, file_path=results_file)
 
     # Set to True to generate the 2D shadow plots.
-    plotting = False
+    plotting = True
     if plotting:
         # Pass the grid dimensions to the plotting function
         plot_history_2d_shadow(file_path=results_file, nx=nx, ny=ny, nz=nz)
