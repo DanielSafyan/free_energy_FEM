@@ -13,12 +13,12 @@
 4. Add first-order-approximated reaction kinematics to NPP simulation **---done---**
 5. Add current calculation and visualization **---done---**
 
-## 3rd dimension
-1. Add Tetrahedral Meshing
-2. Add 3rd dimension to NPP simulation
+## 3rd dimension **---In progress---** 
+1. Add Tetrahedral Meshing  **---done---**
+2. Add 3rd dimension to NPP simulation **---done---**
+3. Test the simulations some more **---In progress---**
 
-
-## PONG game
+## PONG game **---TODO---**
 1. Program Pong game
 2. Translate ball position to stimulation
 3. Translate Stimulation to platform position
@@ -29,3 +29,4 @@
 # Refactoring
 
 - Refactor Fickian and FH to use chemical_potential.py and the new fem_mesh.py properly 
+- Refactor to make everything generalize to the 3rd dimension
