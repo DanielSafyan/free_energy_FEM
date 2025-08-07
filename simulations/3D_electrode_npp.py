@@ -127,7 +127,7 @@ if __name__ == "__main__":
     c0 = 1.0
     L_c = 1e-7
     dt = 1e-10
-    num_steps = 10 # Reduced for faster testing
+    num_steps = 50
 
     # 3. Create simulation instance
     # Assuming NPPwithFOReaction is compatible with the 3D mesh interface
@@ -171,20 +171,20 @@ if __name__ == "__main__":
         sensing_electrode32_idx = get_node_idx(2*nx//4, ny//4, nz)
 
         # 3 stimulating electrode pairs in the middle row at y = 2*ny//4
-        stimulating_electrode11_idx = get_node_idx(nx//4, 2*ny//4, 0)
-        stimulating_electrode12_idx = get_node_idx(nx//4, 2*ny//4, nz)
-        stimulating_electrode21_idx = get_node_idx(3*nx//4, 2*ny//4, 0)
-        stimulating_electrode22_idx = get_node_idx(3*nx//4, 2*ny//4, nz)
-        stimulating_electrode31_idx = get_node_idx(2*nx//4, 2*ny//4, 0)
-        stimulating_electrode32_idx = get_node_idx(2*nx//4, 2*ny//4, nz)
+        # stimulating_electrode11_idx = get_node_idx(nx//4, 2*ny//4, 0)
+        # stimulating_electrode12_idx = get_node_idx(nx//4, 2*ny//4, nz)
+        # stimulating_electrode21_idx = get_node_idx(3*nx//4, 2*ny//4, 0)
+        # stimulating_electrode22_idx = get_node_idx(3*nx//4, 2*ny//4, nz)
+        # stimulating_electrode31_idx = get_node_idx(2*nx//4, 2*ny//4, 0)
+        # stimulating_electrode32_idx = get_node_idx(2*nx//4, 2*ny//4, nz)
 
         # 3 stimulating electrode pairs in the upper row at y = 3*ny//4
-        # stimulating_electrode41_idx = get_node_idx(nx//4, 3*ny//4, 0)
-        # stimulating_electrode42_idx = get_node_idx(nx//4, 3*ny//4, nz)
-        # stimulating_electrode51_idx = get_node_idx(3*nx//4, 3*ny//4, 0)
-        # stimulating_electrode52_idx = get_node_idx(3*nx//4, 3*ny//4, nz)
-        # stimulating_electrode61_idx = get_node_idx(2*nx//4, 3*ny//4, 0)
-        # stimulating_electrode62_idx = get_node_idx(2*nx//4, 3*ny//4, nz)
+        stimulating_electrode41_idx = get_node_idx(nx//4, 3*ny//4, 0)
+        stimulating_electrode42_idx = get_node_idx(nx//4, 3*ny//4, nz)
+        stimulating_electrode51_idx = get_node_idx(3*nx//4, 3*ny//4, 0)
+        stimulating_electrode52_idx = get_node_idx(3*nx//4, 3*ny//4, nz)
+        stimulating_electrode61_idx = get_node_idx(2*nx//4, 3*ny//4, 0)
+        stimulating_electrode62_idx = get_node_idx(2*nx//4, 3*ny//4, nz)
 
         voltage = [
             NPhasesVoltage(node_index=sensing_electrode11_idx, voltage_values=[applied_voltage / 10.0], duration=num_steps),
@@ -194,18 +194,18 @@ if __name__ == "__main__":
             NPhasesVoltage(node_index=sensing_electrode31_idx, voltage_values=[applied_voltage / 10.0], duration=num_steps),
             NPhasesVoltage(node_index=sensing_electrode32_idx, voltage_values=[0.0], duration=num_steps),
 
-            NPhasesVoltage(node_index=stimulating_electrode11_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
-            NPhasesVoltage(node_index=stimulating_electrode12_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
-            NPhasesVoltage(node_index=stimulating_electrode21_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
-            NPhasesVoltage(node_index=stimulating_electrode22_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
-            NPhasesVoltage(node_index=stimulating_electrode31_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
-            NPhasesVoltage(node_index=stimulating_electrode32_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode41_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode42_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode51_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode52_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode61_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode62_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
             ]
 
         
 
     # 5. Set Initial Conditions (3D)
-    experiment = "gaussian"  # Options: "random", "gaussian", "two_blocks"
+    experiment = "random"  # Options: "random", "gaussian", "two_blocks"
     c3_initial_dim = np.full(mesh.num_nodes(), 0.9)
 
     if experiment == "gaussian":
@@ -234,7 +234,7 @@ if __name__ == "__main__":
     for step in tqdm(range(num_steps), desc="3D Simulation Progress"):
         c1_prev, c2_prev, c3_prev = c1.copy(), c2.copy(), c3.copy()
         # Assuming the step function takes a reaction rate k_reaction
-        c1, c2, c3, phi = sim.step(c1_prev, c2_prev, c3_prev, phi, voltage, step, k_reaction=1.5)
+        c1, c2, c3, phi = sim.step(c1_prev, c2_prev, c3_prev, phi, voltage, step, k_reaction=0.1)
         history.append((c1.copy(), c2.copy(), c3.copy(), phi.copy()))
 
     # 7. Save and Plot Results
@@ -247,7 +247,7 @@ if __name__ == "__main__":
     save_history(history, mesh, L_c, sim.tau_c, sim.phi_c, dt, num_steps, physical_constants, file_path=results_file)
 
     # Set to True to generate the 2D shadow plots.
-    plotting = True
+    plotting = False
     if plotting:
         # Pass the grid dimensions to the plotting function
         plot_history_2d_shadow(file_path=results_file, nx=nx, ny=ny, nz=nz)
