@@ -496,8 +496,14 @@ class PongSimulation:
                     pygame.display.flip()
                     clock.tick(60)
 
+                if pong_game.game_over:
+                    pong_game = PongGame(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, False)
+                    
+
                 # Sense ball position -> voltage pattern
                 ball_pos = pong_game.get_ball_block_index()
+
+
                 voltage_pattern = [np.nan] * 12
                 voltage_pattern[2 * ball_pos] = self.applied_voltage
                 voltage_pattern[2 * ball_pos + 1] = 0
