@@ -154,3 +154,67 @@ class NPPwithFOReaction(NernstPlanckPoissonSimulation):
         print(f"Amount of change in phi: {np.linalg.norm(phi - phi_initial)}")
         
         return c1, c2, c3, phi
+    
+    def step2(self, c1_initial, c2_initial, c3_initial, phi_initial, electrode_indices, applied_voltages, k_reaction = 0.5,
+     rtol = 1e-3,atol = 1e-14, max_iter=50):
+        """
+            Makes it possible to run step with only 2 arrays of numbers instead of giving an 
+            array of TemporalVoltage objects.
+
+            electrode_indices: array of indices of the electrodes [np.ndarray: int]
+            applied_voltages: array of applied voltages [np.ndarray: float]
+        """
+        
+        c1, c2, c3, phi = c1_initial.copy(), c2_initial.copy(), c3_initial.copy(), phi_initial.copy()
+
+        initial_residual_norm = -1.0
+
+        if len(electrode_indices) != len(applied_voltages):
+            raise ValueError("The number of electrode indices must match the number of applied voltages.")
+        
+        for i in range(max_iter):
+            residual, jacobian = self._assemble_residual_and_jacobian(c1, c2, c3, phi, c1_initial, c2_initial, c3_initial)
+            
+            for n, elec_idx in enumerate(electrode_indices):
+                if np.isnan(applied_voltages[n]):
+                    continue
+                
+                jacobian, residual = \
+                        self._apply_one_node_electrode(jacobian, residual, phi, applied_voltages[n]/self.phi_c, elec_idx)
+
+                # Apply reaction on the c1 field
+                reactant_idx = 0
+                jacobian, residual = self._apply_first_order_reaction_bc(
+                        jacobian, residual, c1, elec_idx, k_reaction, reactant_idx
+                    )
+                
+                # Apply reaction on the c2 field
+                reactant_idx = 1
+                jacobian, residual = self._apply_first_order_reaction_bc(
+                        jacobian, residual, c2, elec_idx, k_reaction, reactant_idx
+                    )
+
+            
+            norm_res = np.linalg.norm(residual)
+            
+            if i == 0:
+                initial_residual_norm = norm_res if norm_res > 0 else 1.0
+                
+            if norm_res < (initial_residual_norm * rtol) + atol:
+                # print("Converged in", i, "iterations")
+                break
+            
+            delta = spsolve(jacobian, -residual)
+            c1 += self.alpha * delta[0 * self.num_nodes : 1 * self.num_nodes]
+            c2 += self.alpha * delta[1 * self.num_nodes : 2 * self.num_nodes]
+            c3 += self.alpha * delta[2 * self.num_nodes : 3 * self.num_nodes]
+            phi += self.alpha_phi * delta[3 * self.num_nodes : 4 * self.num_nodes]
+        
+        if max_iter <=  i - 1:
+            raise Exception("Did not converge")
+        print(f"Amount of change in c1: {np.linalg.norm(c1 - c1_initial)}")
+        print(f"Amount of change in c2: {np.linalg.norm(c2 - c2_initial)}")
+        print(f"Amount of change in phi: {np.linalg.norm(phi - phi_initial)}")
+
+        
+        return c1, c2, c3, phi

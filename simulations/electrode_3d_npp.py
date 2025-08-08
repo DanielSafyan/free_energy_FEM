@@ -4,9 +4,7 @@ from tqdm import tqdm
 # Matplotlib is now used for the 2D shadow plot
 import matplotlib.pyplot as plt
 
-# --- Import the 3D mesh utilities and the simulation core ---
-# You should have 'utils/fem_mesh_3d.py' from our previous step.
-# I'm assuming the simulation logic is in 'simulations/NPPwithFOReaction.py'
+
 from utils.fem_mesh import TetrahedralMesh, create_structured_mesh_3d
 from simulations.NPPwithFOReaction import NPPwithFOReaction
 from utils.temporal_voltages import NPhasesVoltage

@@ -89,6 +89,13 @@ class SineVoltage(TemporalVoltage):
 
         super().__init__(node_index, time_sequence)
 
+class OneVoltage(TemporalVoltage):
+    """
+    Represents a time-dependent voltage applied to a specific node.
+    """
+    def __init__(self, node_index: int, time_sequence: np.ndarray):
+        super().__init__(node_index, time_sequence)
+
 
 class NPhasesVoltage(TemporalVoltage):
     """
