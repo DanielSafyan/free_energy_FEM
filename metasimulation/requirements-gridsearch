@@ -1,0 +1,28 @@
+# Dependencies to run metasimulation/gridsearch.py (and its transitive imports)
+
+# Core numerical
+numpy
+scipy
+
+# File I/O
+h5py
+
+# UI / game
+pygame
+
+# Progress bars
+tqdm
+
+# Plotting (imported transitively via simulations/electrode_3d_npp)
+matplotlib
+
+# Matplotlib transitive dependencies
+pillow
+cycler
+contourpy
+fonttools
+kiwisolver
+packaging
+pyparsing
+python-dateutil
+six
