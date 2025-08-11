@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 from utils.fem_mesh import TetrahedralMesh, create_structured_mesh_3d
 from simulations.NPPwithFOReaction import NPPwithFOReaction
-from utils.temporal_voltages import NPhasesVoltage
+from utils.temporal_voltages import NPhasesVoltage, TemporalVoltage
 
 
 def save_history(history, mesh, L_c, tau_c, phi_c, dt, num_steps, constants, file_path="output/electrode_npp_3d_results.npz"):
@@ -107,7 +107,7 @@ def get_node_idx(i, j, k):
 if __name__ == "__main__":
     # 1. Simulation Setup (3D)
     # Note: Node count grows as (n+1)^3. Start with smaller numbers.
-    nx, ny, nz = 10, 10, 10
+    nx, ny, nz = 8, 8, 5
     Lx, Ly, Lz = 1.0, 1.0, 1.0
     nodes, elements, boundary_nodes = create_structured_mesh_3d(Lx=Lx, Ly=Ly, Lz=Lz, nx=nx, ny=ny, nz=nz)
     mesh = TetrahedralMesh(nodes, elements)
@@ -124,8 +124,8 @@ if __name__ == "__main__":
     applied_voltage = 1e-1
     c0 = 1.0
     L_c = 1e-7
-    dt = 1e-10
-    num_steps = 50
+    dt = 1e-9
+    num_steps = 30
 
     # 3. Create simulation instance
     # Assuming NPPwithFOReaction is compatible with the 3D mesh interface
@@ -139,7 +139,7 @@ if __name__ == "__main__":
 
     # 4. Define Electrode Placement in 3D
     
-    electrode_configuration = "pong game"
+    electrode_configuration = "test RL"
     if electrode_configuration == "left right stimulation":
         stimulating_electrode1_idx = get_node_idx(nx//4, ny//4, 0)
         stimulating_electrode2_idx = get_node_idx(nx//4, ny//4, nz)
@@ -198,6 +198,53 @@ if __name__ == "__main__":
             NPhasesVoltage(node_index=stimulating_electrode52_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
             NPhasesVoltage(node_index=stimulating_electrode61_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
             NPhasesVoltage(node_index=stimulating_electrode62_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
+            ]
+    elif electrode_configuration == "test RL":
+        sensing_electrode11_idx = get_node_idx(nx//4, ny//4, 0)
+        sensing_electrode12_idx = get_node_idx(nx//4, ny//4, nz)
+        sensing_electrode21_idx = get_node_idx(3*nx//4, ny//4, 0)
+        sensing_electrode22_idx = get_node_idx(3*nx//4, ny//4, nz)
+        sensing_electrode31_idx = get_node_idx(2*nx//4, ny//4, 0)
+        sensing_electrode32_idx = get_node_idx(2*nx//4, ny//4, nz)
+
+        # 3 stimulating electrode pairs in the middle row at y = 2*ny//4
+        # stimulating_electrode11_idx = get_node_idx(nx//4, 2*ny//4, 0)
+        # stimulating_electrode12_idx = get_node_idx(nx//4, 2*ny//4, nz)
+        # stimulating_electrode21_idx = get_node_idx(3*nx//4, 2*ny//4, 0)
+        # stimulating_electrode22_idx = get_node_idx(3*nx//4, 2*ny//4, nz)
+        # stimulating_electrode31_idx = get_node_idx(2*nx//4, 2*ny//4, 0)
+        # stimulating_electrode32_idx = get_node_idx(2*nx//4, 2*ny//4, nz)
+
+        # 3 stimulating electrode pairs in the upper row at y = 3*ny//4
+        stimulating_electrode41_idx = get_node_idx(nx//4, 3*ny//4, 0)
+        stimulating_electrode42_idx = get_node_idx(nx//4, 3*ny//4, nz)
+        stimulating_electrode51_idx = get_node_idx(3*nx//4, 3*ny//4, 0)
+        stimulating_electrode52_idx = get_node_idx(3*nx//4, 3*ny//4, nz)
+        stimulating_electrode61_idx = get_node_idx(2*nx//4, 3*ny//4, 0)
+        stimulating_electrode62_idx = get_node_idx(2*nx//4, 3*ny//4, nz)
+
+        rnd_pattern1 = np.random.uniform(size=num_steps//3)
+        rnd_pattern2 = np.random.uniform(size=num_steps//3)
+        rnd_pattern3 = np.random.uniform(size=num_steps//3)
+        rl_pattern1 = np.concatenate([np.ones(num_steps//3)* applied_voltage, rnd_pattern1, np.ones(num_steps//3)* applied_voltage])
+        rl_pattern2 = np.concatenate([np.ones(num_steps//3)* applied_voltage, rnd_pattern2, np.ones(num_steps//3)* applied_voltage])
+        rl_pattern3 = np.concatenate([np.ones(num_steps//3)* applied_voltage, rnd_pattern3, np.ones(num_steps//3)* applied_voltage])
+
+
+        voltage = [
+            NPhasesVoltage(node_index=sensing_electrode11_idx, voltage_values=[applied_voltage / 10.0], duration=num_steps),
+            NPhasesVoltage(node_index=sensing_electrode12_idx, voltage_values=[0.0], duration=num_steps),
+            NPhasesVoltage(node_index=sensing_electrode21_idx, voltage_values=[applied_voltage / 10.0], duration=num_steps),
+            NPhasesVoltage(node_index=sensing_electrode22_idx, voltage_values=[0.0], duration=num_steps),
+            NPhasesVoltage(node_index=sensing_electrode31_idx, voltage_values=[applied_voltage / 10.0], duration=num_steps),
+            NPhasesVoltage(node_index=sensing_electrode32_idx, voltage_values=[0.0], duration=num_steps),
+
+            TemporalVoltage(node_index=stimulating_electrode41_idx, time_sequence=rl_pattern1),
+            NPhasesVoltage(node_index=stimulating_electrode42_idx, voltage_values=[0.0], duration=num_steps),
+            TemporalVoltage(node_index=stimulating_electrode51_idx, time_sequence=rl_pattern2),
+            NPhasesVoltage(node_index=stimulating_electrode52_idx, voltage_values=[0.0], duration=num_steps),
+            TemporalVoltage(node_index=stimulating_electrode61_idx, time_sequence=rl_pattern3),
+            NPhasesVoltage(node_index=stimulating_electrode62_idx, voltage_values=[0.0], duration=num_steps),
             ]
 
         

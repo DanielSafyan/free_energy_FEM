@@ -139,7 +139,11 @@ class PongH5Reader:
         self.phi = self._f["states/phi"]
         self.ball_pos = self._f["game/ball_pos"]
         self.platform_pos = self._f["game/platform_pos"]
-        self.score = self._f["game/score"]
+        # Backwards compatibility: older files may not have score
+        try:
+            self.score = self._f["game/score"]
+        except KeyError:
+            self.score = None
         self.measured_current = self._f["measurements/measured_current"]
         self.voltage_pattern = self._f["electrodes/voltage_pattern"]
 
@@ -181,7 +185,8 @@ def load_pong_h5(path: str = os.path.join("output", "pong_simulation.h5"), eager
             "game": {
                 "ball_pos": f["game/ball_pos"][...],
                 "platform_pos": f["game/platform_pos"][...],
-                "score": f["game/score"][...],
+                # Backwards compatibility: include score only if present
+                "score": (f["game/score"][...] if "game/score" in f else None),
             },
             "measurements": {
                 "measured_current": f["measurements/measured_current"][...],
@@ -450,7 +455,7 @@ class PongSimulation:
         phi = np.zeros(self.mesh.num_nodes())
         return c1, c2, c3, phi
 
-    def run(self, sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5, output_path=None):
+    def run(self,rl=False, sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5, output_path=None, rl_steps=8):
         # Initialize pygame/game
         pygame.init()
         screen = pygame.display.set_mode((self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
@@ -503,6 +508,20 @@ class PongSimulation:
 
                 if pong_game.game_over:
                     pong_game = PongGame(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, False)
+                    if rl:
+                        # give chaotic signals to increase plasticity for a short time
+                        for _ in range(rl_steps):
+                            measuring_pattern = [measuring_voltage, 0, measuring_voltage, 0, measuring_voltage, 0]
+                            voltage_pattern = np.random.uniform(0, size=12) * self.applied_voltage/2.0
+                            voltage_amount = measuring_pattern + voltage_pattern
+
+                            c1_prev, c2_prev, c3_prev = c1.copy(), c2.copy(), c3.copy()
+                            c1, c2, c3, phi = self.sim.step2(
+                                c1_prev, c2_prev, c3_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
+                            )
+                            append_step(dsets, c1, c2, c3, phi, pong_game.get_ball_position(), plat_pos, pong_game.score, measured_current, voltage_amount)
+                            
+                            
                     
 
                 # Sense ball position -> voltage pattern
@@ -571,4 +590,4 @@ def calculate_platform_position(measured_current):
 
 if __name__ == "__main__":
     sim_runner = PongSimulation()
-    sim_runner.run(sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5)
+    sim_runner.run(sim_ticks=1, game_ticks=6, num_steps=30, k_reaction=0.5, rl=True, rl_steps=4)
