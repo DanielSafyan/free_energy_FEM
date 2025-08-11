@@ -77,6 +77,7 @@ def init_h5_output(mesh, meta, constants):
         "phi": _create_ext_dataset(h5f, "states/phi", (N,), np.float64),
         "ball": _create_ext_dataset(h5f, "game/ball_pos", (2,), np.float64),
         "platform": _create_ext_dataset(h5f, "game/platform_pos", tuple(), np.float64),
+        "score": _create_ext_dataset(h5f, "game/score", tuple(), np.int32),
         "current": _create_ext_dataset(h5f, "measurements/measured_current", (3,), np.float64),
         "voltage": _create_ext_dataset(h5f, "electrodes/voltage_pattern", (18,), np.float64),
     }
@@ -95,17 +96,19 @@ def append_initial_state(dsets, pong_game, c1, c2, c3, phi):
     _append_row(dsets["phi"], phi)
     _append_row(dsets["ball"], np.array(pong_game.get_ball_position(), dtype=np.float64))
     _append_row(dsets["platform"], float(pong_game.get_platform_position()))
+    _append_row(dsets["score"], int(pong_game.score))
     # placeholders to align lengths for step 0
     _append_row(dsets["current"], np.array([np.nan, np.nan, np.nan], dtype=np.float64))
     _append_row(dsets["voltage"], np.full(18, np.nan, dtype=np.float64))
 
-def append_step(dsets, c1, c2, c3, phi, ball_pos_xy, platform_pos, measured_current, voltage_amount):
+def append_step(dsets, c1, c2, c3, phi, ball_pos_xy, platform_pos, score, measured_current, voltage_amount):
     _append_row(dsets["c1"], c1)
     _append_row(dsets["c2"], c2)
     _append_row(dsets["c3"], c3)
     _append_row(dsets["phi"], phi)
     _append_row(dsets["ball"], np.array(ball_pos_xy, dtype=np.float64))
     _append_row(dsets["platform"], float(platform_pos))
+    _append_row(dsets["score"], int(score))
     _append_row(dsets["current"], np.array(measured_current, dtype=np.float64))
     _append_row(dsets["voltage"], np.array(voltage_amount, dtype=np.float64))
 
@@ -136,6 +139,7 @@ class PongH5Reader:
         self.phi = self._f["states/phi"]
         self.ball_pos = self._f["game/ball_pos"]
         self.platform_pos = self._f["game/platform_pos"]
+        self.score = self._f["game/score"]
         self.measured_current = self._f["measurements/measured_current"]
         self.voltage_pattern = self._f["electrodes/voltage_pattern"]
 
@@ -177,6 +181,7 @@ def load_pong_h5(path: str = os.path.join("output", "pong_simulation.h5"), eager
             "game": {
                 "ball_pos": f["game/ball_pos"][...],
                 "platform_pos": f["game/platform_pos"][...],
+                "score": f["game/score"][...],
             },
             "measurements": {
                 "measured_current": f["measurements/measured_current"][...],
@@ -523,7 +528,7 @@ class PongSimulation:
                 pong_game.set_platform_position(int(plat_pos))
 
                 # Log step
-                append_step(dsets, c1, c2, c3, phi, pong_game.get_ball_position(), plat_pos, measured_current, voltage_amount)
+                append_step(dsets, c1, c2, c3, phi, pong_game.get_ball_position(), plat_pos, pong_game.score, measured_current, voltage_amount)
         finally:
             h5f.flush()
             h5f.close()
