@@ -1,6 +1,7 @@
 import itertools
 import os
 import time
+import traceback
 from datetime import datetime
 
 from pong_simulation.pong_simulation import PongSimulation
@@ -55,6 +56,7 @@ def gridsearch_loop(
                 )
             except Exception as e:
                 print(f"[gridsearch] Run failed with error: {e}")
+                print(traceback.format_exc())
             finally:
                 if sleep_between_runs > 0:
                     time.sleep(sleep_between_runs)
