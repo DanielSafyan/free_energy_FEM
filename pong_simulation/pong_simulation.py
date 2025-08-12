@@ -12,12 +12,7 @@ from simulations.NPPwithFOReaction import NPPwithFOReaction
 from utils.temporal_voltages import NPhasesVoltage
 
 from gameplay.pong_game import PongGame
-from simulations.electrode_3d_npp import get_node_idx
-
-nx, ny, nz = 16, 16, 4
-def get_node_idx(i, j, k):
-    # i, j, k are the 0-based indices along the x, y, and z axes
-    return i * (ny + 1) * (nz + 1) + j * (nz + 1) + k
+from simulations.electrode_3d_npp import get_node_idx as _unused_external_get_node_idx
 
 # -----------------------------
 # HDF5 logging utilities
@@ -198,53 +193,8 @@ def load_pong_h5(path: str = os.path.join("output", "pong_simulation.h5"), eager
     return data
 
 def init_voltage():
-    sensing_electrode11_idx = get_node_idx(nx//4, ny//4, 0)
-    sensing_electrode12_idx = get_node_idx(nx//4, ny//4, nz)
-    sensing_electrode21_idx = get_node_idx(nx//4, 2*ny//4, 0)
-    sensing_electrode22_idx = get_node_idx(nx//4, 2*ny//4, nz)
-    sensing_electrode31_idx = get_node_idx(nx//4, 3*ny//4, 0)
-    sensing_electrode32_idx = get_node_idx(nx//4, 3*ny//4, nz)
-
-    # 3 stimulating electrode pairs in the middle row at y = 2*ny//4
-    stimulating_electrode11_idx = get_node_idx(2*nx//4, ny//4, 0)
-    stimulating_electrode12_idx = get_node_idx(2*nx//4, ny//4, nz)
-    stimulating_electrode21_idx = get_node_idx(2*nx//4, 2*ny//4, 0)
-    stimulating_electrode22_idx = get_node_idx(2*nx//4, 2*ny//4, nz)
-    stimulating_electrode31_idx = get_node_idx(2*nx//4, 3*ny//4, 0)
-    stimulating_electrode32_idx = get_node_idx(2*nx//4, 3*ny//4, nz)
-
-    # 3 stimulating electrode pairs in the upper row at y = 3*ny//4
-    stimulating_electrode41_idx = get_node_idx(3*nx//4, ny//4, 0)
-    stimulating_electrode42_idx = get_node_idx(3*nx//4, ny//4, nz)
-    stimulating_electrode51_idx = get_node_idx(3*nx//4, 2*ny//4, 0)
-    stimulating_electrode52_idx = get_node_idx(3*nx//4, 2*ny//4, nz)
-    stimulating_electrode61_idx = get_node_idx(3*nx//4, 3*ny//4, 0)
-    stimulating_electrode62_idx = get_node_idx(3*nx//4, 3*ny//4, nz)
-
-    voltage = [
-        sensing_electrode11_idx,
-        sensing_electrode12_idx,
-        sensing_electrode21_idx,
-        sensing_electrode22_idx,
-        sensing_electrode31_idx,
-        sensing_electrode32_idx,
-        
-        stimulating_electrode11_idx,
-        stimulating_electrode12_idx,
-        stimulating_electrode21_idx,
-        stimulating_electrode22_idx,
-        stimulating_electrode31_idx,
-        stimulating_electrode32_idx,
-
-        stimulating_electrode41_idx,
-        stimulating_electrode42_idx,
-        stimulating_electrode51_idx,
-        stimulating_electrode52_idx,
-        stimulating_electrode61_idx,
-        stimulating_electrode62_idx
-        ]
-
-    return voltage
+    # Deprecated in favor of PongSimulation._init_voltage()
+    raise NotImplementedError("Use PongSimulation._init_voltage() which uses instance nx, ny, nz.")
 
 
 def calculate_current(c1, c2, c3, phi, measuring_indices):
@@ -398,6 +348,7 @@ class PongSimulation:
                  c0=1.0,
                  L_c=1e-7,
                  dt=1e-10,
+                 nx=16, ny=16, nz=4,
                  experiment="random"):
         self.Lx, self.Ly, self.Lz = Lx, Ly, Lz
         self.SCREEN_WIDTH = screen_width
@@ -414,10 +365,12 @@ class PongSimulation:
         self.L_c = L_c
         self.dt = dt
         self.experiment = experiment
+        # Grid resolution
+        self.nx, self.ny, self.nz = nx, ny, nz
 
         # Mesh
         self.nodes, self.elements, self.boundary_nodes = create_structured_mesh_3d(
-            Lx=self.Lx, Ly=self.Ly, Lz=self.Lz, nx=nx, ny=ny, nz=nz
+            Lx=self.Lx, Ly=self.Ly, Lz=self.Lz, nx=self.nx, ny=self.ny, nz=self.nz
         )
         self.mesh = TetrahedralMesh(self.nodes, self.elements)
 
@@ -432,7 +385,141 @@ class PongSimulation:
         )
 
         # Electrodes
-        self.voltage_indices = init_voltage()
+        self.voltage_indices = self._init_voltage()
+
+    # -----------------------------
+    # Mesh indexing helpers
+    # -----------------------------
+    def get_node_idx(self, i, j, k):
+        """Map i,j,k grid indices to node index for (nx,ny,nz)."""
+        return i * (self.ny + 1) * (self.nz + 1) + j * (self.nz + 1) + k
+
+    def _init_voltage(self):
+        """Compute electrode node indices using instance grid size."""
+        nx, ny, nz = self.nx, self.ny, self.nz
+        gi = self.get_node_idx
+        sensing_electrode11_idx = gi(nx//4, ny//4, 0)
+        sensing_electrode12_idx = gi(nx//4, ny//4, nz)
+        sensing_electrode21_idx = gi(nx//4, 2*ny//4, 0)
+        sensing_electrode22_idx = gi(nx//4, 2*ny//4, nz)
+        sensing_electrode31_idx = gi(nx//4, 3*ny//4, 0)
+        sensing_electrode32_idx = gi(nx//4, 3*ny//4, nz)
+
+        # 3 stimulating electrode pairs in the middle row at y = 2*ny//4
+        stimulating_electrode11_idx = gi(2*nx//4, ny//4, 0)
+        stimulating_electrode12_idx = gi(2*nx//4, ny//4, nz)
+        stimulating_electrode21_idx = gi(2*nx//4, 2*ny//4, 0)
+        stimulating_electrode22_idx = gi(2*nx//4, 2*ny//4, nz)
+        stimulating_electrode31_idx = gi(2*nx//4, 3*ny//4, 0)
+        stimulating_electrode32_idx = gi(2*nx//4, 3*ny//4, nz)
+
+        # 3 stimulating electrode pairs in the upper row at y = 3*ny//4
+        stimulating_electrode41_idx = gi(3*nx//4, ny//4, 0)
+        stimulating_electrode42_idx = gi(3*nx//4, ny//4, nz)
+        stimulating_electrode51_idx = gi(3*nx//4, 2*ny//4, 0)
+        stimulating_electrode52_idx = gi(3*nx//4, 2*ny//4, nz)
+        stimulating_electrode61_idx = gi(3*nx//4, 3*ny//4, 0)
+        stimulating_electrode62_idx = gi(3*nx//4, 3*ny//4, nz)
+
+        return [
+            sensing_electrode11_idx,
+            sensing_electrode12_idx,
+            sensing_electrode21_idx,
+            sensing_electrode22_idx,
+            sensing_electrode31_idx,
+            sensing_electrode32_idx,
+            stimulating_electrode11_idx,
+            stimulating_electrode12_idx,
+            stimulating_electrode21_idx,
+            stimulating_electrode22_idx,
+            stimulating_electrode31_idx,
+            stimulating_electrode32_idx,
+            stimulating_electrode41_idx,
+            stimulating_electrode42_idx,
+            stimulating_electrode51_idx,
+            stimulating_electrode52_idx,
+            stimulating_electrode61_idx,
+            stimulating_electrode62_idx,
+        ]
+
+    # -----------------------------
+    # HDF5 logging utilities (instance)
+    # -----------------------------
+    def _create_ext_dataset(self, h5f, name, shape_tail, dtype=np.float64):
+        return _create_ext_dataset(h5f, name, shape_tail, dtype)
+
+    def _init_h5_output(self, meta, constants):
+        os.makedirs("output", exist_ok=True)
+        h5_path = os.path.join("output", "pong_simulation.h5")
+        if os.path.exists(h5_path):
+            os.remove(h5_path)
+        h5f = h5py.File(h5_path, mode="w")
+
+        # Global metadata
+        h5f.attrs.update({
+            "Lx": meta["Lx"],
+            "Ly": meta["Ly"],
+            "Lz": meta["Lz"],
+            "nx": self.nx,
+            "ny": self.ny,
+            "nz": self.nz,
+            "num_nodes": self.mesh.num_nodes(),
+            "num_cells": self.mesh.num_cells(),
+            "dt": meta["dt"],
+            "num_steps": meta["num_steps"],
+            "experiment": meta["experiment"],
+        })
+
+        # Constants as attributes on a group
+        const_grp = h5f.create_group("constants")
+        const_grp.attrs.update(constants)
+
+        # Mesh (static)
+        h5f.create_dataset("mesh/nodes", data=self.mesh.nodes, compression="gzip", compression_opts=4)
+        h5f.create_dataset("mesh/elements", data=self.mesh.elements, compression="gzip", compression_opts=4)
+
+        N = self.mesh.num_nodes()
+        dsets = {
+            "c1": self._create_ext_dataset(h5f, "states/c1", (N,), np.float64),
+            "c2": self._create_ext_dataset(h5f, "states/c2", (N,), np.float64),
+            "c3": self._create_ext_dataset(h5f, "states/c3", (N,), np.float64),
+            "phi": self._create_ext_dataset(h5f, "states/phi", (N,), np.float64),
+            "ball": self._create_ext_dataset(h5f, "game/ball_pos", (2,), np.float64),
+            "platform": self._create_ext_dataset(h5f, "game/platform_pos", tuple(), np.float64),
+            "score": self._create_ext_dataset(h5f, "game/score", tuple(), np.int32),
+            "current": self._create_ext_dataset(h5f, "measurements/measured_current", (3,), np.float64),
+            "voltage": self._create_ext_dataset(h5f, "electrodes/voltage_pattern", (18,), np.float64),
+        }
+
+        return h5f, dsets
+
+    def _append_row(self, ds, row):
+        new_len = ds.shape[0] + 1
+        ds.resize((new_len,) + ds.shape[1:])
+        ds[-1] = row
+
+    def _append_initial_state(self, dsets, pong_game, c1, c2, c3, phi):
+        self._append_row(dsets["c1"], c1)
+        self._append_row(dsets["c2"], c2)
+        self._append_row(dsets["c3"], c3)
+        self._append_row(dsets["phi"], phi)
+        self._append_row(dsets["ball"], np.array(pong_game.get_ball_position(), dtype=np.float64))
+        self._append_row(dsets["platform"], float(pong_game.get_platform_position()))
+        self._append_row(dsets["score"], int(pong_game.score))
+        # placeholders to align lengths for step 0
+        self._append_row(dsets["current"], np.array([np.nan, np.nan, np.nan], dtype=np.float64))
+        self._append_row(dsets["voltage"], np.full(18, np.nan, dtype=np.float64))
+
+    def _append_step(self, dsets, c1, c2, c3, phi, ball_pos_xy, platform_pos, score, measured_current, voltage_amount):
+        self._append_row(dsets["c1"], c1)
+        self._append_row(dsets["c2"], c2)
+        self._append_row(dsets["c3"], c3)
+        self._append_row(dsets["phi"], phi)
+        self._append_row(dsets["ball"], np.array(ball_pos_xy, dtype=np.float64))
+        self._append_row(dsets["platform"], float(platform_pos))
+        self._append_row(dsets["score"], int(score))
+        self._append_row(dsets["current"], np.array(measured_current, dtype=np.float64))
+        self._append_row(dsets["voltage"], np.array(voltage_amount, dtype=np.float64))
 
     def _init_conditions(self):
         if self.experiment == "gaussian":
@@ -469,7 +556,7 @@ class PongSimulation:
         # HDF5
         meta = {
             "Lx": self.Lx, "Ly": self.Ly, "Lz": self.Lz,
-            "nx": nx, "ny": ny, "nz": nz,
+            "nx": self.nx, "ny": self.ny, "nz": self.nz,
             "dt": self.dt, "num_steps": num_steps,
             "experiment": self.experiment,
         }
@@ -481,8 +568,8 @@ class PongSimulation:
             "applied_voltage": self.applied_voltage,
             "measuring_voltage": self.applied_voltage / 10.0,
         }
-        h5f, dsets = init_h5_output(self.mesh, meta, constants)
-        append_initial_state(dsets, pong_game, c1, c2, c3, phi)
+        h5f, dsets = self._init_h5_output(meta, constants)
+        self._append_initial_state(dsets, pong_game, c1, c2, c3, phi)
 
         measuring_voltage = self.applied_voltage / 10.0
 
@@ -513,13 +600,13 @@ class PongSimulation:
                         for _ in range(rl_steps):
                             measuring_pattern = [measuring_voltage, 0, measuring_voltage, 0, measuring_voltage, 0]
                             voltage_pattern = np.random.uniform(0, size=12) * self.applied_voltage/2.0
-                            voltage_amount = measuring_pattern + voltage_pattern
+                            voltage_amount = np.concatenate((measuring_pattern, voltage_pattern))
 
                             c1_prev, c2_prev, c3_prev = c1.copy(), c2.copy(), c3.copy()
                             c1, c2, c3, phi = self.sim.step2(
                                 c1_prev, c2_prev, c3_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
                             )
-                            append_step(dsets, c1, c2, c3, phi, pong_game.get_ball_position(), plat_pos, pong_game.score, measured_current, voltage_amount)
+                            self._append_step(dsets, c1, c2, c3, phi, pong_game.get_ball_position(), plat_pos, pong_game.score, measured_current, voltage_amount)
                             
                             
                     
@@ -547,7 +634,7 @@ class PongSimulation:
                 pong_game.set_platform_position(int(plat_pos))
 
                 # Log step
-                append_step(dsets, c1, c2, c3, phi, pong_game.get_ball_position(), plat_pos, pong_game.score, measured_current, voltage_amount)
+                self._append_step(dsets, c1, c2, c3, phi, pong_game.get_ball_position(), plat_pos, pong_game.score, measured_current, voltage_amount)
         finally:
             h5f.flush()
             h5f.close()
