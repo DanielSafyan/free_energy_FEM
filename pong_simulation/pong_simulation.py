@@ -532,8 +532,8 @@ class PongSimulation:
             c2 = 1.0 - c3 - c1
         elif self.experiment == "random":
             c3 = np.full(self.mesh.num_nodes(), 0.5)
-            c1 = 0.3 + np.random.uniform(-0.1, 0.1, self.mesh.num_nodes())
-            c2 = 1.0 - c3 - c1
+            c1 = 0.25 + np.random.uniform(-0.1, 0.1, self.mesh.num_nodes())
+            c2 = c1.copy() #experiment
         else:
             c3 = np.full(self.mesh.num_nodes(), 0.0)
             c1 = np.full(self.mesh.num_nodes(), 0.5)
