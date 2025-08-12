@@ -4,6 +4,7 @@ import csv
 import os
 from datetime import datetime
 import time
+import numpy as np
 
 # --- Constants ---
 # Screen dimensions
@@ -62,7 +63,8 @@ class PongGame:
 
         # Set the initial velocity of the ball
         self.ball_velocity_x = BALL_SPEED_X
-        self.ball_velocity_y = BALL_SPEED_Y
+        rnd = int(BALL_SPEED_Y * np.random.uniform(-1, 1))
+        self.ball_velocity_y = rnd if np.abs(rnd) > 1 else BALL_SPEED_Y * np.random.choice([-1, 1])
 
         # Game state variables
         self.score = 0
