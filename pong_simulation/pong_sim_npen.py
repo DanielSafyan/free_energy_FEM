@@ -333,9 +333,9 @@ class PongSimulationNPEN:
                  z1=1, z2=-1,
                  chi=0.0,
                  applied_voltage=1e-1,
-                 c0=1.0,
-                 L_c=1e-7,
-                 dt=1e-10,
+                 c0=10.0,
+                 L_c=1e-3,
+                 dt=1e-5,
                  nx=16, ny=16, nz=4,
                  experiment="random"):
         self.Lx, self.Ly, self.Lz = Lx, Ly, Lz
@@ -680,4 +680,4 @@ def calculate_platform_position(measured_current):
 
 if __name__ == "__main__":
     sim_runner = PongSimulationNPEN()
-    sim_runner.run(sim_ticks=1, game_ticks=6, num_steps=30, k_reaction=0.5, rl=True, rl_steps=4)
+    sim_runner.run(sim_ticks=1, game_ticks=6, num_steps=10, k_reaction=0.5, rl=True, rl_steps=4)
