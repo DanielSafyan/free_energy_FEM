@@ -105,10 +105,11 @@ def get_node_idx(i, j, k):
     return i * (ny + 1) * (nz + 1) + j * (nz + 1) + k
 
 if __name__ == "__main__":
+    from NPENwithFOReaction import NPENwithFOReaction
     # 1. Simulation Setup (3D)
     # Note: Node count grows as (n+1)^3. Start with smaller numbers.
-    nx, ny, nz = 8, 8, 5
-    Lx, Ly, Lz = 1.0, 1.0, 1.0
+    nx, ny, nz = 16, 16, 4
+    Lx, Ly, Lz = 1.0, 1.0, 0.25
     nodes, elements, boundary_nodes = create_structured_mesh_3d(Lx=Lx, Ly=Ly, Lz=Lz, nx=nx, ny=ny, nz=nz)
     mesh = TetrahedralMesh(nodes, elements)
     print(f"Created a 3D mesh with {mesh.num_nodes()} nodes and {mesh.num_cells()} elements.")
@@ -121,15 +122,15 @@ if __name__ == "__main__":
     D1, D2, D3 = 1e-9, 1e-9, 1e-9
     z1, z2 = 1, -1
     chi = 0
-    applied_voltage = 1e-1
-    c0 = 1.0
+    applied_voltage = 1e-3
+    c0 = 1e-1
     L_c = 1e-7
     dt = 1e-9
     num_steps = 30
 
     # 3. Create simulation instance
     # Assuming NPPwithFOReaction is compatible with the 3D mesh interface
-    sim = NPPwithFOReaction(
+    sim = NPENwithFOReaction(
         mesh, dt, D1, D2, D3, z1, z2, epsilon, R, T, L_c, c0,
         voltage=applied_voltage,
         alpha=0.5, alpha_phi=0.5,
@@ -139,7 +140,7 @@ if __name__ == "__main__":
 
     # 4. Define Electrode Placement in 3D
     
-    electrode_configuration = "test RL"
+    electrode_configuration = "pong game"
     if electrode_configuration == "left right stimulation":
         stimulating_electrode1_idx = get_node_idx(nx//4, ny//4, 0)
         stimulating_electrode2_idx = get_node_idx(nx//4, ny//4, nz)
@@ -223,14 +224,18 @@ if __name__ == "__main__":
         stimulating_electrode61_idx = get_node_idx(2*nx//4, 3*ny//4, 0)
         stimulating_electrode62_idx = get_node_idx(2*nx//4, 3*ny//4, nz)
 
-        rnd_pattern1 = np.random.uniform(size=num_steps//3)
-        rnd_pattern2 = np.random.uniform(size=num_steps//3)
-        rnd_pattern3 = np.random.uniform(size=num_steps//3)
-        rl_pattern1 = np.concatenate([np.ones(num_steps//3)* applied_voltage, rnd_pattern1, np.ones(num_steps//3)* applied_voltage])
-        rl_pattern2 = np.concatenate([np.ones(num_steps//3)* applied_voltage, rnd_pattern2, np.ones(num_steps//3)* applied_voltage])
-        rl_pattern3 = np.concatenate([np.ones(num_steps//3)* applied_voltage, rnd_pattern3, np.ones(num_steps//3)* applied_voltage])
+        rnd_pattern1 = np.random.uniform(size= num_steps//3) * applied_voltage
+        rnd_pattern2 = np.random.uniform(size=num_steps//3) * applied_voltage
+        rnd_pattern3 = np.random.uniform(size=num_steps//3) * applied_voltage
 
+        # try with negative voltage instead of rnd
+        rl_pattern11 = np.concatenate([np.ones(num_steps//3)* applied_voltage, rnd_pattern1, np.ones(num_steps//3)* applied_voltage])
+        rl_pattern21 = np.concatenate([np.ones(num_steps//3)* applied_voltage, rnd_pattern2, np.ones(num_steps//3)* applied_voltage])
+        rl_pattern31 = np.concatenate([np.ones(num_steps//3)* applied_voltage, rnd_pattern3, np.ones(num_steps//3)* applied_voltage])
 
+        rl_pattern12 = np.concatenate([np.zeros(num_steps//3), rnd_pattern1, np.zeros(num_steps//3)])
+        rl_pattern22 = np.concatenate([np.zeros(num_steps//3), rnd_pattern2, np.zeros(num_steps//3)])
+        rl_pattern32 = np.concatenate([np.zeros(num_steps//3), rnd_pattern3, np.zeros(num_steps//3)])
         voltage = [
             NPhasesVoltage(node_index=sensing_electrode11_idx, voltage_values=[applied_voltage / 10.0], duration=num_steps),
             NPhasesVoltage(node_index=sensing_electrode12_idx, voltage_values=[0.0], duration=num_steps),
@@ -239,12 +244,12 @@ if __name__ == "__main__":
             NPhasesVoltage(node_index=sensing_electrode31_idx, voltage_values=[applied_voltage / 10.0], duration=num_steps),
             NPhasesVoltage(node_index=sensing_electrode32_idx, voltage_values=[0.0], duration=num_steps),
 
-            TemporalVoltage(node_index=stimulating_electrode41_idx, time_sequence=rl_pattern1),
-            NPhasesVoltage(node_index=stimulating_electrode42_idx, voltage_values=[0.0], duration=num_steps),
-            TemporalVoltage(node_index=stimulating_electrode51_idx, time_sequence=rl_pattern2),
-            NPhasesVoltage(node_index=stimulating_electrode52_idx, voltage_values=[0.0], duration=num_steps),
-            TemporalVoltage(node_index=stimulating_electrode61_idx, time_sequence=rl_pattern3),
-            NPhasesVoltage(node_index=stimulating_electrode62_idx, voltage_values=[0.0], duration=num_steps),
+            TemporalVoltage(node_index=stimulating_electrode41_idx, time_sequence=rl_pattern11),
+            NPhasesVoltage(node_index=stimulating_electrode42_idx, voltage_values=-1.0*rl_pattern12, duration=num_steps),
+            TemporalVoltage(node_index=stimulating_electrode51_idx, time_sequence=rl_pattern21),
+            NPhasesVoltage(node_index=stimulating_electrode52_idx, voltage_values=-1.0*rl_pattern22, duration=num_steps),
+            TemporalVoltage(node_index=stimulating_electrode61_idx, time_sequence=rl_pattern31),
+            NPhasesVoltage(node_index=stimulating_electrode62_idx, voltage_values=-1.0*rl_pattern32, duration=num_steps),
             ]
 
         
@@ -261,8 +266,8 @@ if __name__ == "__main__":
         c2_initial_dim = 1.0 - c3_initial_dim - c1_initial_dim
     elif experiment == "random":
         c3_initial_dim = np.full(mesh.num_nodes(), 0.5)
-        c1_initial_dim = 0.35 + np.random.uniform(-0.1, 0.1, mesh.num_nodes())
-        c2_initial_dim = 1.0 - c3_initial_dim - c1_initial_dim
+        c1_initial_dim = 0.25 + np.random.uniform(-0.1, 0.1, mesh.num_nodes())
+        c2_initial_dim = c1_initial_dim.copy()
     else: # "two_blocks" or default
         c3_initial_dim = np.full(mesh.num_nodes(), 0.0)
         c1_initial_dim = np.full(mesh.num_nodes(), 0.5)

@@ -8,10 +8,10 @@ from pong_simulation.pong_simulation import PongSimulation
 
 
 def gridsearch_loop(
-    sim_ticks_list=(1, 2, 3),
-    game_ticks_list=(6, 12),
-    num_steps_list=(50, 100),
-    k_reaction_list=(0.1, 0.5, 1.0),
+    sim_ticks_list=[1],
+    game_ticks_list=[2],
+    num_steps_list=[200,400],
+    k_reaction_list=[0.1],
     output_dir="metasimulation/output",
     sleep_between_runs=1.0,
 ):
@@ -45,7 +45,7 @@ def gridsearch_loop(
                 suffix += 1
 
             try:
-                runner = PongSimulation()
+                runner = PongSimulation(nx=4, ny=4, nz=2)
                 # Save each run to its unique file path
                 runner.run(
                     sim_ticks=sim_ticks,
@@ -53,6 +53,8 @@ def gridsearch_loop(
                     num_steps=num_steps,
                     k_reaction=k_reaction,
                     output_path=out_path,
+                    rl=True,
+                    rl_steps=3,
                 )
             except Exception as e:
                 print(f"[gridsearch] Run failed with error: {e}")

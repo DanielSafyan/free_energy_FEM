@@ -97,15 +97,14 @@ if __name__ == "__main__":
     chi = 0 # No Flory-Huggins interaction
     
     # --- Define the applied voltage ---
-    applied_voltage = 1e-1  # Volts
+    applied_voltage = 1e-2  # Volts
 
     # Characteristic scales
     c0 = 1.0  # mol/m^3
     L_c = 1e-7  # Characteristic length
 
     dt = 1e-10
-    num_steps = 400
-
+    num_steps = 100
     # Judge numerical stability
     l_debye = np.sqrt(epsilon * R * T / (F**2 * c0))
     dt_max = l_debye**2 / (2 * D1)
@@ -135,7 +134,7 @@ if __name__ == "__main__":
 
     # Define or read the temporal voltage 
     voltage = None
-    option = "test neighbor electrodes"
+    option = "boundary"
     if option == "sine":
         voltage = [SineVoltage(node_index=10, period_length=num_steps, time_length=num_steps, amplitude=applied_voltage)]
     elif option == "22phase":
@@ -155,14 +154,17 @@ if __name__ == "__main__":
         voltage = [NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + nx//4, voltage_values=[np.nan], duration=num_steps)]
     elif option == "small":
         # This is numerically very unstable
-        voltage = [NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + 3*nx//4, voltage_values=[applied_voltage/100.0], duration=num_steps), 
-                   NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + nx//4, voltage_values=[-applied_voltage/100.0], duration=num_steps)]
-
+        voltage = [NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2), voltage_values=[applied_voltage/100.0], duration=num_steps), 
+                   NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + nx, voltage_values=[-applied_voltage/100.0], duration=num_steps)]
+    elif option == "boundary":
+        stimulating_electrode1 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2), voltage_values=[0.0], duration=num_steps)
+        stimulating_electrode2 = NPhasesVoltage(node_index=(nx+1)*((ny + 1)//2) + nx, voltage_values=[0.0], duration=num_steps)
+        voltage = [stimulating_electrode1, stimulating_electrode2]
 
 
 
     # 5. Set Initial Conditions (Dimensionless)
-    experiment = "random"  # Options: "random", "gaussian", "two_blocks"
+    experiment = "gaussian"  # Options: "random", "gaussian", "two_blocks"
 
     # Set initial conditions (dimensionless fractions)
     # Initial condition for the neutral species, c3. Let's make it uniform.

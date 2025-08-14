@@ -677,4 +677,4 @@ def calculate_platform_position(measured_current):
 
 if __name__ == "__main__":
     sim_runner = PongSimulation()
-    sim_runner.run(sim_ticks=1, game_ticks=6, num_steps=30, k_reaction=0.5, rl=True, rl_steps=4)
+    sim_runner.run(sim_ticks=1, game_ticks=6, num_steps=10, k_reaction=0.5, rl=False, rl_steps=4)

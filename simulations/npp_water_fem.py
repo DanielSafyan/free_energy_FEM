@@ -411,7 +411,7 @@ class NernstPlanckPoissonSimulation:
 
 
 if __name__ == '__main__':
-    from utils.fem_mesh import create_structured_mesh 
+    from utils.fem_mesh import create_structured_mesh
 
     # 1. Simulation Setup
     nx, ny = 30, 30
@@ -432,14 +432,14 @@ if __name__ == '__main__':
     chi = 0 # No Flory-Huggins interaction
     
     # --- Define the applied voltage ---
-    applied_voltage = 1e-3  # Volts
+    applied_voltage = 0.0  # Volts
 
     # Characteristic scales
     c0 = 1.0  # mol/m^3
     L_c = 1e-7  # Characteristic length
 
     dt = 1e-8
-    num_steps = 10
+    num_steps = 1
 
     # Judge numerical stability
     l_debye = np.sqrt(epsilon * R * T / (F**2 * c0))
@@ -523,6 +523,9 @@ if __name__ == '__main__':
 
     # Solve the modified linear system to get a self-consistent initial potential
     phi_initial_dim = spsolve(A_poisson.tocsc(), rhs_poisson)
+    applied_voltage = phi_initial_dim[sim.right_boundary_nodes[0]]
+
+    
     
     # 6. Run simulation
     history = sim.run(c1_initial_dim, c2_initial_dim, c3_initial_dim, phi_initial_dim, num_steps)

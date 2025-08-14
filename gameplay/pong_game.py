@@ -337,11 +337,13 @@ def main():
 
     # --- Main Game Loop ---
     running = True
+    t = 0
     while running:
         # --- Event Handling ---
         for event in pygame.event.get():
             if event.type == pygame.KEYDOWN and event.key == pygame.K_q:
                 running = False
+                print(f"Game over after {t} timesteps")
             # Allow restarting the game with a key press after game over
             if event.type == pygame.KEYDOWN and game.game_over:
                 if event.key == pygame.K_SPACE:
@@ -360,7 +362,7 @@ def main():
         # --- Game Logic ---
         # Update the game state for one frame
         game.step()
-
+        t += 1
         # --- Drawing ---
         # Draw all elements onto the screen
         game.draw(screen)
