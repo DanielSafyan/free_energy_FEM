@@ -335,7 +335,7 @@ class PongSimulationNPEN:
                  applied_voltage=1e-1,
                  c0=10.0,
                  L_c=1e-3,
-                 dt=1e-5,
+                 dt=1e-2,
                  nx=16, ny=16, nz=4,
                  experiment="random"):
         self.Lx, self.Ly, self.Lz = Lx, Ly, Lz
@@ -590,11 +590,7 @@ class PongSimulationNPEN:
                             c, c3, phi = self.sim.step2(
                                 c_prev, c3_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
                             )
-                            measured_current = calculate_current(c, c3, phi, self.voltage_indices[0:6:2])
-                            plat_pos = calculate_platform_position(measured_current)
                             self._append_step(dsets, c, c3, phi, pong_game.get_ball_position(), plat_pos, pong_game.score, measured_current, voltage_amount)
-                            
-                            
                     
 
                 # Sense ball position -> voltage pattern
