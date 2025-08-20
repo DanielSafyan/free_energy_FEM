@@ -5,7 +5,12 @@ from typing import Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 
-from pong_simulation.pong_simulation import PongH5Reader
+# Support both NPP (default) and NPEN readers
+from pong_simulation.pong_simulation import PongH5Reader as PongH5ReaderNPP
+try:
+    from pong_simulation.pong_sim_npen import PongH5Reader as PongH5ReaderNPEN
+except Exception:
+    PongH5ReaderNPEN = None
 
 
 def tetra_volume(p0: np.ndarray, p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> float:
@@ -64,7 +69,8 @@ def tetra_gradients(nodes_xyz: np.ndarray, elements: np.ndarray) -> Tuple[np.nda
 
 
 def compute_total_free_energy_over_time(h5_path: str, output_png: str = None,
-                                         start_frac: float = 0.0, until_frac: float = 1.0) -> Tuple[np.ndarray, np.ndarray]:
+                                         start_frac: float = 0.0, until_frac: float = 1.0,
+                                         use_npen: bool = False) -> Tuple[np.ndarray, np.ndarray]:
     """
     Load HDF5 simulation data and compute total free energy vs time.
 
@@ -74,15 +80,21 @@ def compute_total_free_energy_over_time(h5_path: str, output_png: str = None,
     if not os.path.exists(h5_path):
         raise FileNotFoundError(f"HDF5 file not found: {h5_path}")
 
-    with PongH5Reader(h5_path) as data:
+    Reader = PongH5ReaderNPEN if use_npen and (PongH5ReaderNPEN is not None) else PongH5ReaderNPP
+    with Reader(h5_path) as data:
         nodes = data.nodes[...]
         elements = data.elements[...]
         attrs = data.attrs
         consts = data.constants
 
         # Required series
-        c1_ds = data.c1
-        c2_ds = data.c2
+        # If NPEN: use single c for both c1 and c2 channels
+        if use_npen and hasattr(data, 'c'):
+            c1_ds = data.c
+            c2_ds = data.c
+        else:
+            c1_ds = data.c1
+            c2_ds = data.c2
         phi_ds = data.phi
 
         Tsteps = min(c1_ds.shape[0], c2_ds.shape[0], phi_ds.shape[0])
@@ -190,7 +202,8 @@ def compute_total_free_energy_over_time(h5_path: str, output_png: str = None,
     return time_array, total_free_energy
 
 
-def compute_cumulative_score_over_time(h5_path: str, start_frac: float = 0.0, until_frac: float = 1.0) -> Tuple[np.ndarray, np.ndarray]:
+def compute_cumulative_score_over_time(h5_path: str, start_frac: float = 0.0, until_frac: float = 1.0,
+                                       use_npen: bool = False) -> Tuple[np.ndarray, np.ndarray]:
     """Read cumulative score per timestep from the HDF5 file.
 
     Uses the stored `game/score` dataset written during simulation.
@@ -199,7 +212,8 @@ def compute_cumulative_score_over_time(h5_path: str, start_frac: float = 0.0, un
     if not os.path.exists(h5_path):
         raise FileNotFoundError(f"HDF5 file not found: {h5_path}")
 
-    with PongH5Reader(h5_path) as data:
+    Reader = PongH5ReaderNPEN if use_npen and (PongH5ReaderNPEN is not None) else PongH5ReaderNPP
+    with Reader(h5_path) as data:
         if getattr(data, "score", None) is None:
             raise RuntimeError("This HDF5 file has no 'game/score' dataset. Regenerate the data with the updated simulator.")
         score_ds = data.score
@@ -225,7 +239,8 @@ def compute_cumulative_score_over_time(h5_path: str, start_frac: float = 0.0, un
     return time_array, cum_scores
 
 
-def compute_left_right_sequence(h5_path: str, start_frac: float = 0.0, until_frac: float = 1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+def compute_left_right_sequence(h5_path: str, start_frac: float = 0.0, until_frac: float = 1.0,
+                                use_npen: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
     """Compute left/right sequence over time along with x positions and midline.
 
     Returns (time_array_s, sides_window, x_window, mid), where sides_window is 0 for left, 1 for right.
@@ -234,7 +249,8 @@ def compute_left_right_sequence(h5_path: str, start_frac: float = 0.0, until_fra
     if not os.path.exists(h5_path):
         raise FileNotFoundError(f"HDF5 file not found: {h5_path}")
 
-    with PongH5Reader(h5_path) as data:
+    Reader = PongH5ReaderNPEN if use_npen and (PongH5ReaderNPEN is not None) else PongH5ReaderNPP
+    with Reader(h5_path) as data:
         ball = data.ball_pos[...]
         attrs = data.attrs
         dt = float(attrs.get("dt", 0.0))
@@ -282,19 +298,50 @@ def main():
                         help='Fraction [0,1] from start to end processing window (e.g., 0.8 stops at 80%)')
     parser.add_argument('--lr-output', default=None,
                         help='Optional CSV to save left-right time sequence: columns time_s, side(0/1), x')
+    parser.add_argument('--npen', action='store_true', help='Use NPEN HDF5 layout (states/c instead of c1/c2)')
+    parser.add_argument('--ts', choices=['s', 'ms', 'mms', 'ns'], default=None,
+                        help='Time scale for plotting/CSV: s=seconds, ms=milliseconds, mms=microseconds, ns=nanoseconds')
     args = parser.parse_args()
 
     try:
+        # Determine time scaling and unit label (explicit flag overrides auto)
+        Reader = PongH5ReaderNPEN if args.npen and (PongH5ReaderNPEN is not None) else PongH5ReaderNPP
+        with Reader(args.h5) as _r:
+            dt = float(_r.attrs.get('dt', 0.0))
+        def _time_scale_from_flag(flag: str | None, dt_seconds: float):
+            if flag:
+                m = flag.lower()
+                if m == 's':
+                    return 1.0, 's'
+                if m == 'ms':
+                    return 1e3, 'ms'
+                if m == 'mms':  # microseconds
+                    return 1e6, 'µs'
+                if m == 'ns':
+                    return 1e9, 'ns'
+            # Auto from dt if not specified
+            if dt_seconds <= 0 or not np.isfinite(dt_seconds):
+                return 1.0, 'steps'
+            if dt_seconds >= 1.0:
+                return 1.0, 's'
+            if dt_seconds >= 1e-3:
+                return 1e3, 'ms'
+            if dt_seconds >= 1e-6:
+                return 1e6, 'µs'
+            return 1e9, 'ns'
+        t_scale, t_unit = _time_scale_from_flag(args.ts, dt)
+
         # Compute free energy over time (no immediate plotting here)
         time_s, E = compute_total_free_energy_over_time(
             args.h5,
             output_png=None,
             start_frac=args.start_frac,
             until_frac=args.until_frac,
+            use_npen=args.npen,
         )
         # Compute cumulative score over time using the same slicing window
         score_t, cum_scores = compute_cumulative_score_over_time(
-            args.h5, start_frac=args.start_frac, until_frac=args.until_frac
+            args.h5, start_frac=args.start_frac, until_frac=args.until_frac, use_npen=args.npen
         )
 
         print(score_t.shape)
@@ -304,15 +351,18 @@ def main():
 
         # Combined figure: Free energy (top) and cumulative score (bottom)
         fig, (axE, axS) = plt.subplots(2, 1, figsize=(10, 8), constrained_layout=True)
-        axE.plot(time_s, E, 'k-', lw=2, label='Total Free Energy')
-        axE.set_xlabel('Time (s)')
+        # Rescale time vectors for plotting
+        time_plot = (time_s * t_scale) if (dt > 0 or args.ts) else time_s
+        score_time_plot = (score_t * t_scale) if (dt > 0 or args.ts) else score_t
+        axE.plot(time_plot, E, 'k-', lw=2, label='Total Free Energy')
+        axE.set_xlabel(f'Time ({t_unit})')
         axE.set_ylabel('Free Energy (J)')
         axE.set_title('Total Free Energy vs Time')
         axE.grid(True, alpha=0.3)
         axE.legend()
 
-        axS.step(score_t, cum_scores, where='post')
-        axS.set_xlabel('Time (s)')
+        axS.step(score_time_plot, cum_scores, where='post')
+        axS.set_xlabel(f'Time ({t_unit})')
         axS.set_ylabel('Cumulative score')
         axS.set_title('Maximum score up to time t')
         axS.grid(True, alpha=0.3)
@@ -320,11 +370,12 @@ def main():
         # Optionally save left-right time sequence CSV
         if args.lr_output:
             lr_t, lr_sides, lr_x, lr_mid = compute_left_right_sequence(
-                args.h5, start_frac=args.start_frac, until_frac=args.until_frac
+                args.h5, start_frac=args.start_frac, until_frac=args.until_frac, use_npen=args.npen
             )
             os.makedirs(os.path.dirname(args.lr_output) or '.', exist_ok=True)
-            out_arr = np.column_stack([lr_t, lr_sides, lr_x])
-            header = f"time_s,side_0left_1right,x,midline={lr_mid}"
+            lr_t_plot = (lr_t * t_scale) if (dt > 0 or args.ts) else lr_t
+            out_arr = np.column_stack([lr_t_plot, lr_sides, lr_x])
+            header = f"time_{t_unit},side_0left_1right,x,midline={lr_mid}"
             np.savetxt(args.lr_output, out_arr, delimiter=',', header=header, comments='')
             print(f"Saved left-right sequence: {args.lr_output} (midline={lr_mid:.3f})")
 

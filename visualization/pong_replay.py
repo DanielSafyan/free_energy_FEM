@@ -102,7 +102,10 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 start_frac: float = 0.0, until_frac: float = 1.0,
                 video: bool = False, video_output: str = os.path.join("output", "pong_replay.mp4"),
                 frame_dir: str = os.path.join("output", "pong_replay_frames"), dpi: int = 100,
-                use_npen: bool = False):
+                use_npen: bool = False,
+                step: int = 1,
+                change: bool = False,
+                time_scale: str | None = None):
     """
     Replay the Pong game using positions recorded in an HDF5 file.
 
@@ -120,7 +123,8 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
         ball_ds = data.ball_pos  # shape (T, 2)
         plat_ds = data.platform_pos  # shape (T,)
         # NPEN provides a single salt concentration `c`; map to both channels for compatibility
-        if use_npen and hasattr(data, 'c'):
+        is_npen = bool(use_npen and hasattr(data, 'c'))
+        if is_npen:
             c1_ds = data.c
             c2_ds = data.c
         else:
@@ -142,6 +146,15 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
         end_idx = max(0, min(end_idx, num_frames))
         if end_idx - start_idx <= 0:
             raise ValueError("Slicing range is empty after applying --from/--until")
+
+        # Build list of global indices to play, honoring the step size
+        if step is None:
+            step = 1
+        if not isinstance(step, int) or step < 1:
+            raise ValueError("--step must be a positive integer (>= 1)")
+        indices = np.arange(start_idx, end_idx, step, dtype=int)
+        if indices.size == 0:
+            raise ValueError("No frames selected after applying --from/--until and --step")
 
         # Initialize pygame and the game renderer
         pygame.init()
@@ -196,6 +209,30 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
 
             # Time step from attrs (float seconds)
             dt = float(attrs.get("dt", 0.0))
+            # Determine time unit scale/label
+            def _time_scale_from_flag(flag: str | None, dt_seconds: float):
+                # explicit flag overrides auto
+                if flag:
+                    m = flag.lower()
+                    if m == 's':
+                        return 1.0, 's'
+                    if m == 'ms':
+                        return 1e3, 'ms'
+                    if m in ('mms', 'us', 'µs'):
+                        return 1e6, 'µs'
+                    if m == 'ns':
+                        return 1e9, 'ns'
+                # auto from dt
+                if dt_seconds <= 0 or not np.isfinite(dt_seconds):
+                    return 1.0, 'steps'
+                if dt_seconds >= 1.0:
+                    return 1.0, 's'
+                if dt_seconds >= 1e-3:
+                    return 1e3, 'ms'
+                if dt_seconds >= 1e-6:
+                    return 1e6, 'µs'
+                return 1e9, 'ns'
+            t_scale, t_unit = _time_scale_from_flag(time_scale, dt)
 
             # For video we create a 2x2 layout: gameplay + three fields
             if video:
@@ -217,7 +254,10 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 ax_phi = fig.add_subplot(gs[1, 1])
             else:
                 plt.ion()
-                fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
+                if is_npen:
+                    fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
+                else:
+                    fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
 
             # Helper to compute triangle face values for a field
             def tri_face_values(field_1d: np.ndarray) -> np.ndarray:
@@ -229,33 +269,47 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                     vals = field_1d[slice_idx]
                     return vals[tri_mid].mean(axis=1)
 
-            # Initialize collections
-            c2_faces = tri_face_values(c2_ds[0])
-            c1_faces = tri_face_values(c1_ds[0])
-            phi_faces = tri_face_values(phi_ds[0])
+            # Initialize collections at the first selected timestep
+            first_idx = int(indices[0])
+            c2_faces = tri_face_values(c2_ds[first_idx])
+            c1_faces = tri_face_values(c1_ds[first_idx])
+            phi_faces = tri_face_values(phi_ds[first_idx])
 
             if not video:
-                ax_c2, ax_c1, ax_phi = axes
+                if is_npen:
+                    ax_c2, ax_phi = axes  # use ax_c2 as the single 'c' panel
+                else:
+                    ax_c2, ax_c1, ax_phi = axes
             title_suffix = "∑z " if sum_z else ""
-            coll_c2 = ax_c2.tripcolor(xy_mid[:, 0], xy_mid[:, 1], tri_mid, facecolors=c2_faces, cmap='plasma')
+            conc_prefix = "Δ " if change else ""
+            # Field names: when NPEN, show single 'c' panel (reuse ax_c2) and label accordingly
+            name_c2 = 'c' if is_npen else 'c2'
+            name_c1 = 'c' if is_npen else 'c1'
+            # For change mode, start at zero field for the first frame
+            init_c2_faces = (c2_faces - c2_faces) if change else c2_faces
+            coll_c2 = ax_c2.tripcolor(xy_mid[:, 0], xy_mid[:, 1], tri_mid, facecolors=init_c2_faces, cmap='plasma')
             ax_c2.triplot(xy_mid[:, 0], xy_mid[:, 1], tri_mid, 'k-', lw=0.1, alpha=0.3)
-            ax_c2.set_title(f"{title_suffix}c2 @ t = {0.0:.2f} ns")
+            t0_disp = ((first_idx * dt * t_scale) if dt > 0 else first_idx)
+            ax_c2.set_title(f"{title_suffix}{conc_prefix}{name_c2} @ t = {t0_disp:.2f} {t_unit}")
             ax_c2.set_aspect('equal')
             ax_c2.set_xlabel("x (m)")
             ax_c2.set_ylabel("y (m)")
-            fig.colorbar(coll_c2, ax=ax_c2, label="Concentration c2")
+            fig.colorbar(coll_c2, ax=ax_c2, label=f"Concentration {name_c2}")
 
-            coll_c1 = ax_c1.tripcolor(xy_mid[:, 0], xy_mid[:, 1], tri_mid, facecolors=c1_faces, cmap='viridis')
-            ax_c1.triplot(xy_mid[:, 0], xy_mid[:, 1], tri_mid, 'k-', lw=0.1, alpha=0.3)
-            ax_c1.set_title(f"{title_suffix}c1 @ t = {0.0:.2f} ns")
-            ax_c1.set_aspect('equal')
-            ax_c1.set_xlabel("x (m)")
-            ax_c1.set_ylabel("y (m)")
-            fig.colorbar(coll_c1, ax=ax_c1, label="Concentration c1")
+            if not (is_npen and not video):
+                # Only create the second concentration panel when not collapsing for NPEN in live view
+                init_c1_faces = (c1_faces - c1_faces) if change else c1_faces
+                coll_c1 = ax_c1.tripcolor(xy_mid[:, 0], xy_mid[:, 1], tri_mid, facecolors=init_c1_faces, cmap='viridis')
+                ax_c1.triplot(xy_mid[:, 0], xy_mid[:, 1], tri_mid, 'k-', lw=0.1, alpha=0.3)
+                ax_c1.set_title(f"{title_suffix}{conc_prefix}{name_c1} @ t = {t0_disp:.2f} {t_unit}")
+                ax_c1.set_aspect('equal')
+                ax_c1.set_xlabel("x (m)")
+                ax_c1.set_ylabel("y (m)")
+                fig.colorbar(coll_c1, ax=ax_c1, label=f"Concentration {name_c1}")
 
             coll_phi = ax_phi.tripcolor(xy_mid[:, 0], xy_mid[:, 1], tri_mid, facecolors=phi_faces, cmap='coolwarm')
             ax_phi.triplot(xy_mid[:, 0], xy_mid[:, 1], tri_mid, 'k-', lw=0.1, alpha=0.3)
-            ax_phi.set_title(f"{title_suffix}φ @ t = {0.0:.2f} ns")
+            ax_phi.set_title(f"{title_suffix}φ @ t = {t0_disp:.2f} {t_unit}")
             ax_phi.set_aspect('equal')
             ax_phi.set_xlabel("x (m)")
             ax_phi.set_ylabel("y (m)")
@@ -276,10 +330,10 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 ax_game.axis('off')
 
         running = True
-        # local frame counter in the selected window
+        # local frame counter over selected indices
         t = 0
         prev_center = False
-        total_in_window = end_idx - start_idx
+        total_in_window = int(indices.size)
         while running and t < total_in_window:
             # Handle minimal events to keep window responsive and allow quit
             for event in pygame.event.get():
@@ -291,8 +345,8 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
 
             
 
-            # Global index within full arrays
-            g = start_idx + t
+            # Global index within full arrays (respecting step)
+            g = int(indices[t])
             # Apply recorded positions for this frame
             bx, by = ball_ds[g]
             py = plat_ds[g]
@@ -336,25 +390,47 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                         vals2d_c2 = c2_ds[g][cols].sum(axis=1)
                         vals2d_c1 = c1_ds[g][cols].sum(axis=1)
                         vals2d_phi = phi_ds[g][cols].sum(axis=1)
-                        c2_faces = vals2d_c2[tri_mid].mean(axis=1)
-                        c1_faces = vals2d_c1[tri_mid].mean(axis=1)
+                        c2_faces_curr = vals2d_c2[tri_mid].mean(axis=1)
+                        c1_faces_curr = vals2d_c1[tri_mid].mean(axis=1)
                         phi_faces = vals2d_phi[tri_mid].mean(axis=1)
                     else:
-                        c2_faces = (c2_ds[g][slice_idx])[tri_mid].mean(axis=1)
-                        c1_faces = (c1_ds[g][slice_idx])[tri_mid].mean(axis=1)
+                        c2_faces_curr = (c2_ds[g][slice_idx])[tri_mid].mean(axis=1)
+                        c1_faces_curr = (c1_ds[g][slice_idx])[tri_mid].mean(axis=1)
                         phi_faces = (phi_ds[g][slice_idx])[tri_mid].mean(axis=1)
+
+                    if change:
+                        # Compare against 'step' raw timesteps earlier (clamped to start_idx)
+                        g_prev = int(max(start_idx, g - step))
+                        if sum_z:
+                            vals2d_c2_prev = c2_ds[g_prev][cols].sum(axis=1)
+                            vals2d_c1_prev = c1_ds[g_prev][cols].sum(axis=1)
+                            c2_faces_prev = vals2d_c2_prev[tri_mid].mean(axis=1)
+                            c1_faces_prev = vals2d_c1_prev[tri_mid].mean(axis=1)
+                        else:
+                            c2_faces_prev = (c2_ds[g_prev][slice_idx])[tri_mid].mean(axis=1)
+                            c1_faces_prev = (c1_ds[g_prev][slice_idx])[tri_mid].mean(axis=1)
+                        c2_faces = c2_faces_curr - c2_faces_prev
+                        c1_faces = c1_faces_curr - c1_faces_prev
+                    else:
+                        c2_faces = (c2_faces_curr - c2_faces_curr) if change else c2_faces_curr
+                        c1_faces = (c1_faces_curr - c1_faces_curr) if change else c1_faces_curr
+
                     coll_c2.set_array(c2_faces)
-                    coll_c1.set_array(c1_faces)
+                    if not (is_npen and not video):
+                        coll_c1.set_array(c1_faces)
                     coll_phi.set_array(phi_faces)
                     # Per-frame autoscaling like free_energy_visualization (no fixed vmin/vmax)
                     coll_c2.set_clim(vmin=float(np.nanmin(c2_faces)), vmax=float(np.nanmax(c2_faces)))
-                    coll_c1.set_clim(vmin=float(np.nanmin(c1_faces)), vmax=float(np.nanmax(c1_faces)))
+                    #print(f"all 0 = {np.all(c2_faces == 0)}")
+                    if not (is_npen and not video):
+                        coll_c1.set_clim(vmin=float(np.nanmin(c1_faces)), vmax=float(np.nanmax(c1_faces)))
                     coll_phi.set_clim(vmin=float(np.nanmin(phi_faces)), vmax=float(np.nanmax(phi_faces)))
-                    # Titles with time in ns if dt available
-                    t_ns = g * dt * 1e9 if dt > 0 else g
-                    ax_c2.set_title(f"{title_suffix}c2 @ t = {t_ns:.2f} ns")
-                    ax_c1.set_title(f"{title_suffix}c1 @ t = {t_ns:.2f} ns")
-                    ax_phi.set_title(f"{title_suffix}φ @ t = {t_ns:.2f} ns")
+                    # Titles with selected time scale
+                    t_disp = (g * dt * t_scale) if dt > 0 else g
+                    ax_c2.set_title(f"{title_suffix}{conc_prefix}{name_c2} @ t = {t_disp:.2f} {t_unit}")
+                    if not (is_npen and not video):
+                        ax_c1.set_title(f"{title_suffix}{conc_prefix}{name_c1} @ t = {t_disp:.2f} {t_unit}")
+                    ax_phi.set_title(f"{title_suffix}φ @ t = {t_disp:.2f} {t_unit}")
                     if video:
                         import pygame.surfarray as surfarray
                         frame_rgb = np.transpose(surfarray.array3d(screen), (1, 0, 2))
@@ -409,6 +485,7 @@ def main():
     parser.add_argument("--fps", type=int, default=60, help="Replay frames per second (default: 60)")
     parser.add_argument("--no-fields", action="store_true", help="Disable c1/c2/phi plotting window")
     parser.add_argument("--sum", action="store_true", help="Display z-sum of fields instead of single mid-plane slice")
+    parser.add_argument("--change", action="store_true", help="Plot change (Δ) in concentration vs previous selected timestep instead of absolute values")
     parser.add_argument("--from", dest="start_frac", type=float, default=0.0,
                         help="Fraction [0,1] from start to begin playback (e.g., 0.3 starts at 30%)")
     parser.add_argument("--until", dest="until_frac", type=float, default=1.0,
@@ -417,6 +494,13 @@ def main():
     parser.add_argument("--video-output", default=os.path.join("output", "pong_replay.mp4"),
                         help="Output MP4 file path (default: output/pong_replay.mp4)")
     parser.add_argument("--npen", action="store_true", help="Use NPEN HDF5 layout (states/c instead of c1/c2)")
+    parser.add_argument("--ts", choices=["s", "ms", "mms", "ns"], default=None,
+                        help="Time scale for plotting (overrides auto): s seconds, ms milliseconds, mms microseconds, ns nanoseconds")
+    parser.add_argument("--step", type=int, default=1,
+                        help=(
+                            "Sampling stride (>=1): only every Nth timestep is plotted. "
+                            "When --change is set, the delta is computed vs the frame that is 'step' raw timesteps earlier."
+                        ))
     args = parser.parse_args()
 
     try:
@@ -432,7 +516,7 @@ def main():
         s_idx = int(np.floor(max(0.0, min(1.0, args.start_frac)) * _T))
         e_idx = int(np.ceil(max(0.0, min(1.0, args.until_frac)) * _T))
         print(f"Dataset length (timesteps): {_T}")
-        print(f"Using slice [{s_idx}:{e_idx}] (fraction {args.start_frac:.3f} to {args.until_frac:.3f})")
+        print(f"Using slice [{s_idx}:{e_idx}] (fraction {args.start_frac:.3f} to {args.until_frac:.3f}), step={args.step}")
 
         replay_pong(
             args.h5,
@@ -444,6 +528,9 @@ def main():
             video=args.video,
             video_output=args.video_output,
             use_npen=args.npen,
+            step=args.step,
+            change=args.change,
+            time_scale=args.ts,
         )
     except Exception as e:
         print(f"Error during replay: {e}", file=sys.stderr)
