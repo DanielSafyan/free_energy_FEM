@@ -10,8 +10,7 @@ concentration at the surface node.
 It mirrors the structure of simulations/NPPwithFOReaction.py but adapted to the
 NPEN state vector [c, c3, phi].
 """
-import numpy as np
-from scipy.sparse.linalg import spsolve
+from utils.backend import xp as np, spsolve
 
 from .npen_fem import NernstPlanckElectroneutralSimulation
 

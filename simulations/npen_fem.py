@@ -30,9 +30,7 @@ API:
 """
 from typing import Optional, List, Tuple
 import os
-import numpy as np
-from scipy.sparse import lil_matrix, csc_matrix, hstack, vstack
-from scipy.sparse.linalg import spsolve, norm
+from utils.backend import xp as np, lil_matrix, csc_matrix, hstack_sparse as hstack, vstack_sparse as vstack, spsolve, norm
 from tqdm import tqdm
 
 from utils.fem_mesh import TriangularMesh
@@ -180,8 +178,8 @@ class NernstPlanckElectroneutralSimulation:
                     stiffness_integral = self.mesh.integrate_grad_phi_i_grad_phi_j(cell_idx, i, j)
                     K[nodes[i], nodes[j]] += stiffness_integral
 
-        self.M_mat = csc_matrix(M)
-        self.K_mat = csc_matrix(K)
+            self.M_mat = csc_matrix(M)
+            self.K_mat = csc_matrix(K)
 
         print(f"Norm of Mass Matrix: {norm(self.M_mat)}")
         print(f"Norm of Stiffness Matrix: {norm(self.K_mat)}")

@@ -1,5 +1,4 @@
-import numpy as np
-from scipy.sparse import lil_matrix, csc_matrix
+from utils.backend import xp as np, lil_matrix, csc_matrix, vstack as sparse_vstack, hstack as sparse_hstack
 
 class TriangularMesh:
     """A class to represent a 2D triangular mesh."""
@@ -129,7 +128,7 @@ class TriangularMesh:
                     # Add contribution to the matrix
                     K[nodes[i], nodes[j]] += coeff_avg * grad_integral
 
-        return csc_matrix(K)
+            return csc_matrix(K)
 
 
 def create_structured_mesh(Lx=1.0, Ly=1.0, nx=20, ny=20):

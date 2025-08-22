@@ -1,4 +1,4 @@
-import numpy as np
+from utils.backend import xp as np
 import os
 from tqdm import tqdm
 import pygame
@@ -333,7 +333,7 @@ class PongSimulationNPEN:
     """Encapsulates the Pong + NPEN simulation for reusable runs."""
 
     def __init__(self,
-                 Lx=1.0, Ly=1.0, Lz=0.25,
+                 Lx=8.0, Ly=8.0, Lz=1.0,
                  screen_width=400, screen_height=600,
                  R=8.314, T=298.0, F=96485.33,
                  epsilon=80 * 8.854e-12,
@@ -342,8 +342,8 @@ class PongSimulationNPEN:
                  chi=0.0,
                  applied_voltage=1e-1,
                  c0=10.0,
-                 L_c=1e-3,
-                 dt=1e-2,
+                 L_c=1e-2,
+                 dt=1e-5,
                  nx=16, ny=16, nz=4,
                  experiment="random"):
         self.Lx, self.Ly, self.Lz = Lx, Ly, Lz
@@ -695,4 +695,4 @@ def calculate_platform_position(measured_current):
 
 if __name__ == "__main__":
     sim_runner = PongSimulationNPEN()
-    sim_runner.run(sim_ticks=1, game_ticks=6, num_steps=10, k_reaction=0.5, rl=True, rl_steps=4)
+    sim_runner.run(sim_ticks=1, game_ticks=6, num_steps=30, k_reaction=0.5, rl=True, rl_steps=4)

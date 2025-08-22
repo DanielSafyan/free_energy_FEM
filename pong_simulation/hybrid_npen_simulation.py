@@ -3,7 +3,7 @@ Hybrid NPEN simulation that uses C++ core for performance-critical parts
 while maintaining Python interface for ease of use.
 """
 
-import numpy as np
+from utils.backend import xp as np
 import sys
 import os
 
@@ -32,7 +32,7 @@ class HybridNPENwithFOReaction:
         # Import the base class here to avoid circular imports
         from simulations.NPENwithFOReaction import NPENwithFOReaction
         
-        # Store the base class for later use
+        # Either python class to fall back on or None to raise exception
         self._base_class = NPENwithFOReaction
         
         # Initialize parent class
