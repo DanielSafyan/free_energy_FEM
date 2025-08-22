@@ -12,10 +12,15 @@ ipython_config.py
 
 # output files
 
-*.txt
 *.mp4
 !output/README.md
 *.png
 *.npz
 *.h5
 *.xdmf
+
+# C++ build files
+build
+CMakeFiles
+CMakeCache.txt
+CMakeFiles.json

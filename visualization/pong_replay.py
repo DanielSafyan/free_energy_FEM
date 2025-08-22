@@ -183,7 +183,6 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
         except Exception:
             center_frames = None
 
-        # Optional Matplotlib setup for c1, c2, phi like free_energy_visualization
         # If video is requested, we also enable field plotting for the video frames.
         if show_fields or video:
             # Precompute mid-plane triangulation and global color limits

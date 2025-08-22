@@ -9,6 +9,14 @@ import sys
 
 from utils.fem_mesh import TetrahedralMesh, create_structured_mesh_3d
 from simulations.NPENwithFOReaction import NPENwithFOReaction
+
+# Try to import the Hybrid NPEN simulation class
+try:
+    from pong_simulation.hybrid_npen_simulation import HybridNPENwithFOReaction
+    HYBRID_AVAILABLE = True
+except ImportError:
+    HYBRID_AVAILABLE = False
+    print("Hybrid NPEN simulation not available. Using standard Python implementation.")
 from utils.temporal_voltages import NPhasesVoltage
 
 from gameplay.pong_game import PongGame
@@ -363,14 +371,25 @@ class PongSimulationNPEN:
         self.mesh = TetrahedralMesh(self.nodes, self.elements)
 
         # Simulation core
-        self.sim = NPENwithFOReaction(
-            self.mesh, self.dt, self.D1, self.D2, self.D3, self.z1, self.z2,
-            self.epsilon, self.R, self.T, self.L_c, self.c0,
-            voltage=self.applied_voltage,
-            alpha=0.5, alpha_phi=0.5,
-            chemical_potential_terms=[],
-            boundary_nodes=self.boundary_nodes,
-        )
+        use_cpp = True
+        if HYBRID_AVAILABLE and use_cpp:
+            self.sim = HybridNPENwithFOReaction(
+                self.mesh, self.dt, self.D1, self.D2, self.D3, self.z1, self.z2,
+                self.epsilon, self.R, self.T, self.L_c, self.c0,
+                voltage=self.applied_voltage,
+                alpha=0.5, alpha_phi=0.5,
+                chemical_potential_terms=[],
+                boundary_nodes=self.boundary_nodes,
+            )
+        else:
+            self.sim = NPENwithFOReaction(
+                self.mesh, self.dt, self.D1, self.D2, self.D3, self.z1, self.z2,
+                self.epsilon, self.R, self.T, self.L_c, self.c0,
+                voltage=self.applied_voltage,
+                alpha=0.5, alpha_phi=0.5,
+                chemical_potential_terms=[],
+                boundary_nodes=self.boundary_nodes,
+            )
 
         # Electrodes
         self.voltage_indices = self._init_voltage()
@@ -611,7 +630,7 @@ class PongSimulationNPEN:
                     )
 
                 # Measure current and update platform
-                measured_current = calculate_current(c, c3, phi, self.voltage_indices[0:6:2])
+                measured_current = calculate_current(c, c3, phi, [self.voltage_indices[0], self.voltage_indices[2], self.voltage_indices[4]])
                 plat_pos = calculate_platform_position(measured_current)
                 pong_game.set_platform_position(int(plat_pos))
 

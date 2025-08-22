@@ -1,0 +1,12 @@
+name: fem_cpp_env
+dependencies:
+  - python=3.13
+  - cmake
+  - eigen
+  - pybind11
+  - hdf5
+  - pip
+  - pip:
+    - numpy
+    - scipy
+    - matplotlib

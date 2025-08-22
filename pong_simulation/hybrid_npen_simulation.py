@@ -1,0 +1,96 @@
+"""
+Hybrid NPEN simulation that uses C++ core for performance-critical parts
+while maintaining Python interface for ease of use.
+"""
+
+import numpy as np
+import sys
+import os
+
+# Try to import the C++ FEM core
+try:
+    # Add the C++ build directory to Python path
+    cpp_build_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cpp_fem_core', 'build')
+    if os.path.exists(cpp_build_dir):
+        sys.path.insert(0, cpp_build_dir)
+    import fem_core_py as fem_cpp
+    CPP_FEM_AVAILABLE = True
+    print("C++ FEM core module found and imported successfully!")
+except ImportError:
+    CPP_FEM_AVAILABLE = False
+    print("C++ FEM core module not available. Using Python implementation.")
+
+
+class HybridNPENwithFOReaction:
+    """
+    Hybrid NPEN simulation that uses C++ core for performance-critical parts
+    while maintaining Python interface for ease of use.
+    """    
+    def __init__(self, mesh, dt, D1, D2, D3, z1, z2, 
+                 epsilon, R, T, L_c, c0, voltage=0.0, alpha=1.0, alpha_phi=1.0,
+                 chemical_potential_terms=None, boundary_nodes=None, temporal_voltages=None):
+        # Import the base class here to avoid circular imports
+        from simulations.NPENwithFOReaction import NPENwithFOReaction
+        
+        # Store the base class for later use
+        self._base_class = NPENwithFOReaction
+        
+        # Initialize parent class
+        self._sim = self._base_class(mesh, dt, D1, D2, D3, z1, z2, epsilon, R, T, L_c, c0, 
+                                     voltage, alpha, alpha_phi, chemical_potential_terms, 
+                                     boundary_nodes, temporal_voltages)
+        
+        # Copy attributes from the base class
+        for attr in dir(self._sim):
+            if not attr.startswith('__') and not callable(getattr(self._sim, attr)):
+                setattr(self, attr, getattr(self._sim, attr))
+        
+        # Initialize C++ core if available
+        if CPP_FEM_AVAILABLE:
+            try:
+                # Convert mesh to format expected by C++
+                mesh_nodes = mesh.nodes
+                mesh_elements = mesh.elements
+                self.cpp_mesh = fem_cpp.TetrahedralMesh(mesh_nodes, mesh_elements)
+                self.cpp_simulation = fem_cpp.NPENSimulation(
+                    self.cpp_mesh, dt, D1, D2, D3, z1, z2, epsilon, R, T, L_c, c0)
+                self.use_cpp = True
+                print("C++ FEM core initialized successfully!")
+            except Exception as e:
+                print(f"Failed to initialize C++ core: {e}")
+                self.use_cpp = False
+        else:
+            self.use_cpp = False
+            print("Using Python implementation for FEM computations.")
+    
+    def step2(self, c_initial, c3_initial, phi_initial, electrode_indices, applied_voltages, 
+              rtol=1e-3, atol=1e-14, max_iter=50, k_reaction=0.5):
+        """Perform one simulation step using either C++ or Python implementation"""
+        if self.use_cpp:
+            # Use C++ implementation for better performance
+            try:
+                # Convert numpy arrays to the format expected by C++
+                import numpy as np
+                c_prev = np.ascontiguousarray(c_initial, dtype=np.float64)
+                c3_prev = np.ascontiguousarray(c3_initial, dtype=np.float64)
+                phi_prev = np.ascontiguousarray(phi_initial, dtype=np.float64)
+                elec_indices = np.ascontiguousarray(electrode_indices, dtype=np.int32)
+                voltages = np.ascontiguousarray(applied_voltages, dtype=np.float64)
+                
+                # Call C++ step2 function
+                c_next, c3_next, phi_next = self.cpp_simulation.step2(
+                    c_prev, c3_prev, phi_prev, elec_indices, voltages, rtol, atol, max_iter)
+                
+                return c_next, c3_next, phi_next
+            except Exception as e:
+                print(f"C++ step2 failed, falling back to Python: {e}")
+                return self._sim.step2(c_initial, c3_initial, phi_initial, electrode_indices, applied_voltages, 
+                                     rtol, atol, max_iter, k_reaction)
+        else:
+            # Use Python implementation
+            return self._sim.step2(c_initial, c3_initial, phi_initial, electrode_indices, applied_voltages, 
+                                 rtol, atol, max_iter, k_reaction)
+
+    def __getattr__(self, name):
+        """Delegate attribute access to the base simulation object"""
+        return getattr(self._sim, name)
