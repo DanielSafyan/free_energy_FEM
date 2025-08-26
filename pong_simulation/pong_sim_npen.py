@@ -330,7 +330,12 @@ def calculate_current(c, c3, phi, measuring_indices):
 
 
 class PongSimulationNPEN:
-    """Encapsulates the Pong + NPEN simulation for reusable runs."""
+    """Encapsulates the Pong + NPEN simulation for reusable runs.
+        default dimensions:   
+        - time step: 0.01 s
+        - domain size: 1x1x0.25 mm
+        - grid resolution: 16x16x4  
+    """
 
     def __init__(self,
                  Lx=1.0, Ly=1.0, Lz=0.25,
@@ -694,5 +699,5 @@ def calculate_platform_position(measured_current):
     return np.floor(I1*0 + I2*200 + I3*400)
 
 if __name__ == "__main__":
-    sim_runner = PongSimulationNPEN()
-    sim_runner.run(sim_ticks=1, game_ticks=6, num_steps=10, k_reaction=0.5, rl=True, rl_steps=4)
+    sim_runner = PongSimulationNPEN(dt=0.1)
+    sim_runner.run(sim_ticks=5, game_ticks=10, num_steps=20, k_reaction=0.01, rl=False, rl_steps=4)

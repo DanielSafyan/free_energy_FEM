@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.19)
 project(FEMSimulationCore)
 
 # Set C++ standard
@@ -8,9 +8,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Enable position independent code for shared libraries
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Explicitly set Python executable and libraries for pybind11
-set(PYBIND11_PYTHON_VERSION 3.13)
+# Let pybind11 find the active Python interpreter/libraries dynamically
 set(PYBIND11_FINDPYTHON ON)
+find_package(Python3 COMPONENTS Interpreter Development.Module REQUIRED)
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} -c "import sysconfig; print(sysconfig.get_paths().get('platlib') or sysconfig.get_paths()['purelib'])"
+    OUTPUT_VARIABLE PY_SITE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
 
 # Find required packages
 find_package(Eigen3 REQUIRED)
@@ -50,6 +55,13 @@ endif()
 if(pybind11_FOUND)
     pybind11_add_module(fem_core_py src/pybind_module.cpp)
     target_link_libraries(fem_core_py PRIVATE fem_core)
+
+    # Install Python module into the active interpreter's site-packages
+    install(TARGETS fem_core_py
+        LIBRARY DESTINATION ${PY_SITE}
+        RUNTIME DESTINATION ${PY_SITE}
+        ARCHIVE DESTINATION ${PY_SITE}
+    )
     if(HDF5_FOUND)
         target_link_libraries(fem_core_py PRIVATE ${HDF5_LIBRARIES})
     endif()
