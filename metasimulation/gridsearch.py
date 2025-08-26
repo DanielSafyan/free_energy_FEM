@@ -52,6 +52,7 @@ def gridsearch_loop(
                     game_ticks=game_ticks,
                     num_steps=num_steps,
                     k_reaction=k_reaction,
+                    output_path=out_path,
                 )
             except Exception as e:
                 print(f"[gridsearch] Run failed with error: {e}")
