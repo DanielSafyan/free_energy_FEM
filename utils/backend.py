@@ -61,8 +61,9 @@ linalg_inv = xp.linalg.inv
 if has_lil_matrix:
     lil_matrix = sparse_lib.lil_matrix
 else:
-    # For CuPy, we'll use COO format as a substitute for LIL
+    # For CuPy, we'll use CSR format as a substitute for LIL
     # This is a workaround since CuPy doesn't have LIL matrices
+    # CSR matrices support item assignment, which is needed for matrix assembly
     def lil_matrix(shape, dtype=None):
         """
         A LIL matrix implementation using CSR matrix for CuPy compatibility.
