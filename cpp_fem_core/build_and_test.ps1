@@ -18,21 +18,23 @@ function Get-PybinPath([string]$py) {
 $python = if ($env:PYTHON) { $env:PYTHON } else { 'python' }
 $pythonPath = Get-PybinPath $python
 
-Write-Host "Python: $(& $pythonPath -V 2>$null)"
+$pyver = & $pythonPath -V 2>$null
+Write-Host "Python: $pyver"
 Write-Host "CMake: $(cmake --version | Select-Object -First 1)"
 try { $cm = Get-Command cmake -ErrorAction Stop; Write-Host "Using cmake at: $($cm.Source)" } catch {}
 
 # Try to discover pybind11's CMake config dir from active Python
 $pybind11Dir = ''
 try {
-  $pybind11Dir = & $pythonPath - <<'PY'
+  $code = @'
 import sys
 try:
     import pybind11
-    sys.stdout.write(pybind11.get_cmake_dir())
+    print(pybind11.get_cmake_dir(), end="")
 except Exception:
     pass
-PY
+'@
+  $pybind11Dir = & $pythonPath -c $code
 } catch {}
 if ($pybind11Dir) { Write-Host "Detected pybind11 CMake dir: $pybind11Dir" }
 
@@ -52,11 +54,11 @@ Set-Location "build"
 # Compose CMake configure args
 $cmakeArgs = @(
   "-DCMAKE_DISABLE_FIND_PACKAGE_HDF5=$disableHDF5",
-  "-DPython3_EXECUTABLE=$pythonPath"
+  "-DPython3_EXECUTABLE=`"$pythonPath`""
 )
-if ($pybind11Dir) { $cmakeArgs += "-Dpybind11_DIR=$pybind11Dir" }
-if ($env:EIGEN3_INCLUDE_DIR) { $cmakeArgs += "-DEIGEN3_INCLUDE_DIR=$env:EIGEN3_INCLUDE_DIR" }
-if ($toolchain) { $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchain" }
+if ($pybind11Dir) { $cmakeArgs += "-Dpybind11_DIR=`"$pybind11Dir`"" }
+if ($env:EIGEN3_INCLUDE_DIR) { $cmakeArgs += "-DEIGEN3_INCLUDE_DIR=`"$env:EIGEN3_INCLUDE_DIR`"" }
+if ($toolchain) { $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=`"$toolchain`"" }
 if ($Generator) {
   $cmakeArgs = @('-G', $Generator) + $cmakeArgs
   if ($Arch) { $cmakeArgs = @('-A', $Arch) + $cmakeArgs }
@@ -93,7 +95,7 @@ cmake --install . --config $Config
 
 # Python smoke test
 Write-Host "Running Python smoke test..."
-& $pythonPath - <<'PY'
+$smoke = @'
 import sys
 print('Python executable:', sys.executable)
 try:
@@ -108,6 +110,7 @@ try:
 except Exception as e:
     print('Python smoke test FAILED:', e)
     raise
-PY
+'@
+& $pythonPath -c $smoke
 
 Write-Host "Build, install, and Python smoke tests completed successfully!"
