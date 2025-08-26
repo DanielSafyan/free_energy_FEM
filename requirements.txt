@@ -3,4 +3,6 @@ scipy
 pygame
 pygame_gui
 matplotlib
-
+h5py
+tqdm
+pybind11
