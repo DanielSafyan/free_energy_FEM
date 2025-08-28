@@ -401,6 +401,7 @@ class NernstPlanckElectroneutralSimulation:
 
 if __name__ == '__main__':
     from utils.fem_mesh import create_structured_mesh
+    from pong_simulation.pong_sim_npen import HybridNPENwithFOReaction
 
     nx, ny = 20, 20
     Lx, Ly = 1.0, 1.0

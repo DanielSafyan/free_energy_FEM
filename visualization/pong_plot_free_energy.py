@@ -238,6 +238,25 @@ def compute_cumulative_score_over_time(h5_path: str, start_frac: float = 0.0, un
 
     return time_array, cum_scores
 
+ 
+def compute_hitrate_from_cumulative_scores(cum_scores: np.ndarray, horizon: int) -> np.ndarray:
+    """Compute rolling count of score increases over a fixed timestep horizon.
+    Only in-window increases are counted; decreases are ignored.
+    """
+    if horizon <= 0:
+        raise ValueError("horizon must be positive")
+    # Differences between consecutive cumulative scores (first diff = 0 within window)
+    delta = np.diff(cum_scores, prepend=cum_scores[0])
+    # Count only positive increments (hits)
+    delta = np.clip(delta, 0, None)
+    # Rolling sum over the last 'horizon' steps for each t
+    N = int(delta.shape[0])
+    cs = np.cumsum(np.concatenate(([0], delta)))
+    idx = np.arange(1, N + 1)
+    start_idx = np.maximum(0, idx - horizon)
+    rolling = cs[idx] - cs[start_idx]
+    return rolling
+
 
 def compute_left_right_sequence(h5_path: str, start_frac: float = 0.0, until_frac: float = 1.0,
                                 use_npen: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
@@ -301,6 +320,8 @@ def main():
     parser.add_argument('--npen', action='store_true', help='Use NPEN HDF5 layout (states/c instead of c1/c2)')
     parser.add_argument('--ts', choices=['s', 'ms', 'mms', 'ns'], default=None,
                         help='Time scale for plotting/CSV: s=seconds, ms=milliseconds, mms=microseconds, ns=nanoseconds')
+    parser.add_argument('--hitrate', nargs='?', const=200, type=int, metavar='H', default=None,
+                        help='Replace lower plot with rolling hit count: number of score increases in the last H timesteps (default H=200 if omitted).')
     args = parser.parse_args()
 
     try:
@@ -349,7 +370,7 @@ def main():
         print(np.sum(cum_scores))
 
 
-        # Combined figure: Free energy (top) and cumulative score (bottom)
+        # Combined figure: Free energy (top) and score metric (bottom)
         fig, (axE, axS) = plt.subplots(2, 1, figsize=(10, 8), constrained_layout=True)
         # Rescale time vectors for plotting
         time_plot = (time_s * t_scale) if (dt > 0 or args.ts) else time_s
@@ -361,11 +382,23 @@ def main():
         axE.grid(True, alpha=0.3)
         axE.legend()
 
-        axS.step(score_time_plot, cum_scores, where='post')
-        axS.set_xlabel(f'Time ({t_unit})')
-        axS.set_ylabel('Cumulative score')
-        axS.set_title('Maximum score up to time t')
-        axS.grid(True, alpha=0.3)
+        if args.hitrate is not None:
+            H = int(args.hitrate)
+            hitrate = compute_hitrate_from_cumulative_scores(cum_scores, H)
+            axS.plot(score_time_plot, hitrate, color='C1', lw=1.8, label=f'Hitrate (last {H} steps)')
+            axS.set_xlabel(f'Time ({t_unit})')
+            axS.set_ylabel(f'Hits in last {H} steps')
+            axS.set_title('Rolling Hit Count')
+            axS.grid(True, alpha=0.3)
+            axS.legend()
+            # Optional intuitive y-limit
+            axS.set_ylim(0, max(np.max(hitrate) * 1.1, 1))
+        else:
+            axS.step(score_time_plot, cum_scores, where='post')
+            axS.set_xlabel(f'Time ({t_unit})')
+            axS.set_ylabel('Cumulative score')
+            axS.set_title('Maximum score up to time t')
+            axS.grid(True, alpha=0.3)
 
         # Optionally save left-right time sequence CSV
         if args.lr_output:

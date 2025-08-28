@@ -106,6 +106,7 @@ def get_node_idx(i, j, k):
 
 if __name__ == "__main__":
     from NPENwithFOReaction import NPENwithFOReaction
+    from pong_simulation.pong_sim_npen import HybridNPENwithFOReaction
     # 1. Simulation Setup (3D)
     # Note: Node count grows as (n+1)^3. Start with smaller numbers.
     nx, ny, nz = 16, 16, 4
@@ -130,17 +131,18 @@ if __name__ == "__main__":
 
     # 3. Create simulation instance
     # Assuming NPPwithFOReaction is compatible with the 3D mesh interface
-    sim = NPENwithFOReaction(
+    sim = HybridNPENwithFOReaction(
         mesh, dt, D1, D2, D3, z1, z2, epsilon, R, T, L_c, c0,
         voltage=applied_voltage,
         alpha=0.5, alpha_phi=0.5,
         chemical_potential_terms=[],
         boundary_nodes=boundary_nodes
     )
+    npen = True
 
     # 4. Define Electrode Placement in 3D
     
-    electrode_configuration = "pong game"
+    electrode_configuration = "migration"
     if electrode_configuration == "left right stimulation":
         stimulating_electrode1_idx = get_node_idx(nx//4, ny//4, 0)
         stimulating_electrode2_idx = get_node_idx(nx//4, ny//4, nz)
@@ -159,6 +161,14 @@ if __name__ == "__main__":
             NPhasesVoltage(node_index=sensing_electrode2_idx, voltage_values=[0.0], duration=num_steps),
             NPhasesVoltage(node_index=stimulating_electrode3_idx, voltage_values=[applied_voltage, np.nan, applied_voltage], duration=num_steps),
             NPhasesVoltage(node_index=stimulating_electrode4_idx, voltage_values=[0.0, np.nan, 0.0], duration=num_steps),
+        ]
+    elif electrode_configuration == "migration":
+        stimulating_electrode1_idx = get_node_idx(nx//4, ny//4, nz//2)
+        stimulating_electrode2_idx = get_node_idx(3*nx//4, ny//4, nz//2)
+
+        voltage = [
+            NPhasesVoltage(node_index=stimulating_electrode1_idx, voltage_values=[applied_voltage], duration=num_steps),
+            NPhasesVoltage(node_index=stimulating_electrode2_idx, voltage_values=[-applied_voltage], duration=num_steps),
         ]
     elif electrode_configuration == "pong game":
         # 3 sensing electrode pairs in the lower row at y = ny//4
@@ -273,6 +283,8 @@ if __name__ == "__main__":
         c1_initial_dim = np.full(mesh.num_nodes(), 0.5)
         c1_initial_dim[nodes[:, 0] < Lx / 2] = 0.4
         c2_initial_dim = 1.0 - c3_initial_dim - c1_initial_dim
+
+    
 
     phi_initial_dim = np.zeros(mesh.num_nodes())
 

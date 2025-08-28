@@ -131,9 +131,13 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
             c1_ds = data.c1
             c2_ds = data.c2
         phi_ds = data.phi
+        # Prefer stored score dataset if present (backwards compatible)
+        score_ds = getattr(data, "score", None)
         nodes = data.nodes[...]
         attrs = data.attrs
         num_frames = min(ball_ds.shape[0], plat_ds.shape[0], c1_ds.shape[0], c2_ds.shape[0], phi_ds.shape[0])
+        if score_ds is not None:
+            num_frames = min(num_frames, score_ds.shape[0])
 
         # Determine slice window [start_idx:end_idx)
         if not (0.0 <= start_frac <= 1.0) or not (0.0 <= until_frac <= 1.0):
@@ -172,15 +176,18 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
 
         # logging=False to avoid CSV side effects during replay
         game = PongGame(SCREEN_WIDTH, SCREEN_HEIGHT, logging=False)
-        # Score overlay setup
-        pygame.font.init()
-        font = pygame.font.SysFont(None, 24)
-        score = 0
-        # For robust detection, precompute center equals for all frames
-        try:
-            all_ball = ball_ds[...]
-            center_frames = (all_ball == all_ball[0]).all(axis=1)
-        except Exception:
+        # Score handling: prefer stored score; fallback only for older files
+        pygame.font.init()  # PongGame handles its own font rendering
+        if score_ds is None:
+            score = 0
+            # For robust detection, precompute center equals for all frames
+            try:
+                all_ball = ball_ds[...]
+                center_frames = (all_ball == all_ball[0]).all(axis=1)
+            except Exception:
+                center_frames = None
+        else:
+            score = None
             center_frames = None
 
         # If video is requested, we also enable field plotting for the video frames.
@@ -355,28 +362,27 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
             game.ball.y = int(by)
             game.set_platform_position(int(py))
 
-            # Draw current frame using the game's draw routine
-            game.draw(screen)
-            # Detect round restart and update score
-            is_center = False
-            if center_frames is not None:
-                is_center = bool(center_frames[g])
+            # Update score from HDF5 if available; else fallback to heuristic
+            if score_ds is not None:
+                try:
+                    game.score = int(score_ds[g])
+                except Exception:
+                    pass
             else:
-                init_bx, init_by = ball_ds[0]
-                is_center = (bx == init_bx) and (by == init_by) and (t != 0)
-            if is_center and (t > 0) and (not prev_center):
-                score += 1
-            prev_center = is_center
+                # Detect round restart and update score
+                is_center = False
+                if center_frames is not None:
+                    is_center = bool(center_frames[g])
+                else:
+                    init_bx, init_by = ball_ds[0]
+                    is_center = (bx == init_bx) and (by == init_by) and (t != 0)
+                if is_center and (t > 0) and (not prev_center):
+                    score += 1
+                    game.score = int(score)
+                prev_center = is_center
 
-            # Overlay score text (top-left)
-            try:
-                text = font.render(f"Score: {score}", True, (255, 255, 255))
-                # Draw a simple shadow for readability
-                shadow = font.render(f"Score: {score}", True, (0, 0, 0))
-                screen.blit(shadow, (11, 11))
-                screen.blit(text, (10, 10))
-            except Exception:
-                pass
+            # Draw current frame; PongGame draws centered score at the top
+            game.draw(screen)
             pygame.display.flip()
 
             clock.tick(fps)
