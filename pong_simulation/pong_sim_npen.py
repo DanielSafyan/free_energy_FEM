@@ -460,11 +460,14 @@ class PongSimulationNPEN:
     def _create_ext_dataset(self, h5f, name, shape_tail, dtype=np.float64):
         return _create_ext_dataset(h5f, name, shape_tail, dtype)
 
-    def _init_h5_output(self, meta, constants):
-        os.makedirs("output", exist_ok=True)
-        h5_path = os.path.join("output", "pong_simulation.h5")
-        if os.path.exists(h5_path):
-            os.remove(h5_path)
+    def _init_h5_output(self, meta, constants, output_path=None):
+        # Determine target HDF5 path: use provided output_path if given, otherwise default
+        if output_path:
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            h5_path = output_path
+        else:
+            os.makedirs("output", exist_ok=True)
+            h5_path = os.path.join("output", "pong_simulation.h5")
         h5f = h5py.File(h5_path, mode="w")
         # Remember where we wrote the raw simulation history
         self._h5_path = h5_path
@@ -576,7 +579,7 @@ class PongSimulationNPEN:
             "applied_voltage": self.applied_voltage,
             "measuring_voltage": self.applied_voltage / 10.0,
         }
-        h5f, dsets = self._init_h5_output(meta, constants)
+        h5f, dsets = self._init_h5_output(meta, constants, output_path)
         self._append_initial_state(dsets, pong_game, c, c3, phi)
 
         measuring_voltage = self.applied_voltage / 10.0
@@ -650,41 +653,11 @@ class PongSimulationNPEN:
             except Exception:
                 pass
             pygame.quit()
-            # Optionally move/rename the output HDF5 to avoid overwriting
-            if output_path:
-                try:
-                    import shutil
-                    from datetime import datetime
-                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                    # If output_path is a directory, build a filename
-                    if os.path.isdir(output_path) or output_path.endswith(('/',)):
-                        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-                        fname = f"pong_sim_{sim_ticks}_{game_ticks}_{num_steps}_{k_reaction}_{ts}.h5"
-                        dest = os.path.join(output_path, fname)
-                    else:
-                        dest = output_path
-                    src = os.path.join("output", "pong_sim_npen.h5")
-                    if os.path.exists(src):
-                        shutil.move(src, dest)
-                        print(f"Saved history to: {dest}")
-                    else:
-                        # Fallback: print original path if custom src not found
-                        try:
-                            print(f"Saved history to: {self._h5_path}")
-                        except Exception:
-                            pass
-                except Exception:
-                    # On any failure, still report the original location
-                    try:
-                        print(f"Saved history to: {self._h5_path}")
-                    except Exception:
-                        pass
-            else:
-                # No move requested; report original location
-                try:
-                    print(f"Saved history to: {self._h5_path}")
-                except Exception:
-                    pass
+            # Report saved history path (file was written directly to target)
+            try:
+                print(f"Saved history to: {self._h5_path}")
+            except Exception:
+                pass
 
 
 def calculate_platform_position(measured_current):
