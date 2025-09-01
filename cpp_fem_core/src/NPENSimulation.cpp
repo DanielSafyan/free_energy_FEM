@@ -228,109 +228,133 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev, const Eigen::VectorXd&
                            Eigen::VectorXd& c_next, Eigen::VectorXd& c3_next, 
                            Eigen::VectorXd& phi_next,
                            double rtol, double atol, int max_iter) {
-    size_t numNodes = m_mesh->numNodes();
-    
-    // Initialize solution vectors
-    c_next = c_prev;
-    c3_next = c3_prev;
-    phi_next = phi_prev;
-    
-    // Reaction rate constant (match Python default)
-    double k_reaction = 0.5;
-    
+    const int N = static_cast<int>(m_mesh->numNodes());
+
+    // Initialize from previous state
+    Eigen::VectorXd c = c_prev;
+    Eigen::VectorXd c3 = c3_prev;
+    Eigen::VectorXd phi = phi_prev;
+
+    // Dimensionless parameters
+    const double D_c = std::max({m_D1, m_D2, m_D3});
+    const double D1_dim = m_D1 / D_c;
+    const double D2_dim = m_D2 / D_c;
+    const double D3_dim = m_D3 / D_c;
+    const double dt_dim = m_dt * D_c / (m_L_c * m_L_c);
+
+    // First-order reaction (dim-less); residual has -k*c, so diag adds -k
+    const double k_reaction = 0.5;
+    const double k_reac_diag = -k_reaction * m_L_c / D_c;
+
     double initial_residual_norm = -1.0;
-    
     for (int it = 0; it < max_iter; ++it) {
-        // Assemble residuals for each variable
-        Eigen::VectorXd residual_c = Eigen::VectorXd::Zero(numNodes);
-        Eigen::VectorXd residual_c3 = Eigen::VectorXd::Zero(numNodes);
-        Eigen::VectorXd residual_phi = Eigen::VectorXd::Zero(numNodes);
-        
-        assembleResidualAndJacobian(c_next, c3_next, phi_next, c_prev, c3_prev,
-                                    residual_c, residual_c3, residual_phi);
-        
-        // Apply Dirichlet BCs and first-order reaction terms at specified electrode nodes
+        // Jacobian blocks (same as step())
+        Eigen::SparseMatrix<double> J_cc_drift = assembleConvectionMatrix(phi, D1_dim * m_z1);
+        Eigen::VectorXd w_cphi = (D1_dim * m_z1) * c;
+        Eigen::SparseMatrix<double> K_c_phi = assembleWeightedStiffness(w_cphi);
+        Eigen::VectorXd w_phiphi = (D1_dim + D2_dim) * c;
+        Eigen::SparseMatrix<double> K_phi_phi = assembleWeightedStiffness(w_phiphi);
+
+        Eigen::SparseMatrix<double> J11 = (1.0 / dt_dim) * m_M_c + D1_dim * m_K_c + J_cc_drift;
+        Eigen::SparseMatrix<double> J13 = K_c_phi;
+        Eigen::SparseMatrix<double> J22 = (1.0 / dt_dim) * m_M_c + D3_dim * m_K_c;
+        Eigen::SparseMatrix<double> J31 = -(D1_dim - D2_dim) * m_K_c;
+        Eigen::SparseMatrix<double> J33 = K_phi_phi;
+
+        // Residuals
+        Eigen::VectorXd R_c   = (1.0 / dt_dim) * (m_M_c * (c  - c_prev)) + D1_dim * (m_K_c * c)  + K_c_phi   * phi;
+        Eigen::VectorXd R_c3  = (1.0 / dt_dim) * (m_M_c * (c3 - c3_prev)) + D3_dim * (m_K_c * c3);
+        Eigen::VectorXd R_phi = K_phi_phi * phi + (-(D1_dim - D2_dim)) * (m_K_c * c);
+
+        // Apply reaction on c at electrode nodes and collect phi Dirichlet constraints
+        std::vector<std::pair<int,double>> phi_dirichlet; // (node, voltage_dim)
+        phi_dirichlet.reserve(electrode_indices.size());
         for (int i = 0; i < electrode_indices.size(); ++i) {
-            int node_idx = electrode_indices(i);
-            if (node_idx < 0 || node_idx >= (int)numNodes) continue;  // Skip invalid indices
-            
-            // Check if we have a corresponding voltage value
+            int node = electrode_indices(i);
+            if (node < 0 || node >= N) continue;
             if (i >= applied_voltages.size()) continue;
-            
-            // Skip if voltage is NaN
-            if (std::isnan(applied_voltages(i))) continue;
-            
-            // Apply Dirichlet BC: phi = applied_voltage
-            // Convert applied voltage to dimensionless form
-            double voltage_dim = applied_voltages(i) / m_phi_c;
-            
-            // Set residual for phi at this node to enforce BC
-            residual_phi(node_idx) = phi_next(node_idx) - voltage_dim;
-            
-            // Apply first-order reaction boundary condition on c at the same node
-            // J_reaction = -k * c, added to the residual
-            double k_reaction_dimless = -k_reaction * m_L_c / std::max({m_D1, m_D2, m_D3});
-            residual_c(node_idx) += k_reaction_dimless * c_next(node_idx);
+            double V = applied_voltages(i);
+            if (std::isnan(V)) continue;
+            // Reaction contribution
+            R_c(node) += k_reac_diag * c(node);
+            phi_dirichlet.emplace_back(node, V / m_phi_c);
         }
-        
-        // Combine residuals into single vector
-        Eigen::VectorXd residual = Eigen::VectorXd::Zero(3 * numNodes);
-        residual.segment(0, numNodes) = residual_c;
-        residual.segment(numNodes, numNodes) = residual_c3;
-        residual.segment(2 * numNodes, numNodes) = residual_phi;
-        
-        // Compute residual norm
-        double nrm = residual.norm();
-        if (it == 0) {
-            initial_residual_norm = (nrm > 0) ? nrm : 1.0;
-        }
-        
-        // Check for convergence
-        if (nrm < (initial_residual_norm * rtol) + atol) {
-            break;
-        }
-        
-        // For now, we'll use a simplified update approach
-        // In a full implementation, we would solve the coupled system
-        // But we'll improve the decoupled approach with better scaling
-        
-        // Non-dimensional parameters for proper scaling
-        double D_c = std::max({m_D1, m_D2, m_D3});
-        double dt_dim = m_dt * D_c / (m_L_c * m_L_c);
-        
-        // Improved decoupled updates with proper scaling
-        for (size_t i = 0; i < numNodes; ++i) {
-            // Update c with under-relaxation and proper scaling
-            if (std::abs(residual_c(i)) < 1e10) {  // Avoid updating if residual is too large
-                c_next(i) -= 0.5 * residual_c(i) * dt_dim;
+
+        // Assemble global Jacobian
+        std::vector<Eigen::Triplet<double>> trips;
+        trips.reserve(J11.nonZeros() + J13.nonZeros() + J22.nonZeros() + J31.nonZeros() + J33.nonZeros() + static_cast<int>(phi_dirichlet.size()));
+        auto appendBlock = [&](const Eigen::SparseMatrix<double>& A, int r0, int c0) {
+            for (int k = 0; k < A.outerSize(); ++k) {
+                for (Eigen::SparseMatrix<double>::InnerIterator it(A, k); it; ++it) {
+                    trips.emplace_back(r0 + it.row(), c0 + it.col(), it.value());
+                }
             }
-            
-            // Update c3 with under-relaxation and proper scaling
-            if (std::abs(residual_c3(i)) < 1e10) {  // Avoid updating if residual is too large
-                c3_next(i) -= 0.5 * residual_c3(i) * dt_dim;
-            }
-            
-            // Update phi with under-relaxation
-            if (std::abs(residual_phi(i)) < 1e10) {  // Avoid updating if residual is too large
-                phi_next(i) -= 0.5 * residual_phi(i);
-            }
+        };
+        appendBlock(J11, 0, 0);
+        appendBlock(J13, 0, N);
+        appendBlock(J22, N, N);
+        appendBlock(J31, 2 * N, 0);
+        appendBlock(J33, 2 * N, 2 * N);
+        // Reaction diagonal on J11
+        for (const auto& nd : phi_dirichlet) trips.emplace_back(nd.first, nd.first, k_reac_diag);
+
+        // Stack residuals
+        Eigen::VectorXd R(3 * N);
+        R.segment(0, N) = R_c;
+        R.segment(N, N) = R_c3;
+        R.segment(2 * N, N) = R_phi;
+
+        // Strong Dirichlet for phi at electrodes
+        std::vector<Eigen::Triplet<double>> tripsFiltered;
+        tripsFiltered.reserve(trips.size());
+        std::vector<int> enforced_rows; enforced_rows.reserve(phi_dirichlet.size());
+        for (const auto& nd : phi_dirichlet) enforced_rows.push_back(2 * N + nd.first);
+        for (const auto& t : trips) {
+            bool drop = false;
+            for (int r : enforced_rows) { if (t.row() == r) { drop = true; break; } }
+            if (!drop) tripsFiltered.push_back(t);
         }
-        
-        // Apply hard limits to prevent divergence
-        for (size_t i = 0; i < numNodes; ++i) {
-            // Limit c to reasonable range
-            if (c_next(i) < 0.0) c_next(i) = 0.0;
-            if (c_next(i) > 2.0) c_next(i) = 2.0;
-            
-            // Limit c3 to reasonable range
-            if (c3_next(i) < 0.0) c3_next(i) = 0.0;
-            if (c3_next(i) > 2.0) c3_next(i) = 2.0;
-            
-            // Limit phi to reasonable range
-            if (phi_next(i) < -10.0) phi_next(i) = -10.0;
-            if (phi_next(i) > 10.0) phi_next(i) = 10.0;
+        for (const auto& nd : phi_dirichlet) {
+            int row = 2 * N + nd.first;
+            tripsFiltered.emplace_back(row, row, 1.0);
+            R(row) = phi(nd.first) - nd.second;
         }
+        // If no electrodes given, anchor gauge at phi(0)
+        if (phi_dirichlet.empty() && N > 0) {
+            const int anchorRow = 2 * N + 0;
+            std::vector<Eigen::Triplet<double>> tmp; tmp.reserve(tripsFiltered.size());
+            for (const auto& t : tripsFiltered) if (t.row() != anchorRow) tmp.push_back(t);
+            tmp.emplace_back(anchorRow, anchorRow, 1.0);
+            tripsFiltered.swap(tmp);
+            R(anchorRow) = phi(0);
+        }
+
+        Eigen::SparseMatrix<double> J(3 * N, 3 * N);
+        J.setFromTriplets(tripsFiltered.begin(), tripsFiltered.end());
+        J.makeCompressed();
+
+        // Solve J * delta = -R
+        Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
+        solver.analyzePattern(J);
+        solver.factorize(J);
+        if (solver.info() != Eigen::Success) { c_next = c_prev; c3_next = c3_prev; phi_next = phi_prev; return; }
+        Eigen::VectorXd delta = solver.solve(-R);
+
+        // Update
+        const double alpha = 1.0, alpha_phi = 1.0;
+        c   += alpha     * delta.segment(0, N);
+        c3  += alpha     * delta.segment(N, N);
+        phi += alpha_phi * delta.segment(2 * N, N);
+
+        // Convergence
+        double nrm = R.norm();
+        if (it == 0) initial_residual_norm = (nrm > 0 ? nrm : 1.0);
+        if (nrm < (initial_residual_norm * rtol) + atol) break;
     }
+
+    c_next = c;
+    c3_next = c3;
+    phi_next = phi;
 }
 
 void NPENSimulation::assembleResidualAndJacobian(
