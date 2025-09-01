@@ -609,8 +609,10 @@ class PongSimulationNPEN:
                     if rl:
                         # give chaotic signals to increase plasticity for a short time
                         for _ in range(rl_steps):
-                            measuring_pattern = [-measuring_voltage/2.0, measuring_voltage/2.0, -measuring_voltage/2.0, measuring_voltage/2.0, -measuring_voltage/2.0, measuring_voltage/2.0]
-                            voltage_pattern = [self.applied_voltage/2.0 * (-1)**(i+1) for i in range(12)]
+                            # invert voltage pattern
+                            voltage_pattern = [0] * 12
+                            for i in range(6): voltage_pattern[2*i+1] = self.applied_voltage
+                            measuring_pattern = [0, measuring_voltage, 0, measuring_voltage, 0, measuring_voltage]
                             voltage_amount = measuring_pattern + voltage_pattern
 
                             c_prev, c3_prev = c.copy(), c3.copy()
@@ -625,9 +627,9 @@ class PongSimulationNPEN:
 
 
                 voltage_pattern = [np.nan] * 12
-                voltage_pattern[2 * ball_pos] = self.applied_voltage/2.0
-                voltage_pattern[2 * ball_pos + 1] = -self.applied_voltage/2.0
-                measuring_pattern = [measuring_voltage/2.0, -measuring_voltage/2.0, measuring_voltage/2.0, -measuring_voltage/2.0, measuring_voltage/2.0, -measuring_voltage/2.0]
+                voltage_pattern[2 * ball_pos] = self.applied_voltage
+                voltage_pattern[2 * ball_pos + 1] = 0
+                measuring_pattern = [measuring_voltage, 0, measuring_voltage, 0, measuring_voltage, 0]
                 voltage_amount = measuring_pattern + voltage_pattern
 
                 # Simulation steps
