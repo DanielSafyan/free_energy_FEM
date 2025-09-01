@@ -23,6 +23,35 @@ cmake -DCMAKE_DISABLE_FIND_PACKAGE_HDF5=${DISABLE_HDF5:-ON} ..
 # Build
 cmake --build . -j
 
+# Ensure smoke test uses the same Python as CMake (PYTHON3_EXECUTABLE or Python3_EXECUTABLE)
+CM_CACHE=$(cmake -LA -N .)
+PY_FROM_CMAKE=$(echo "$CM_CACHE" | sed -n 's/^PYTHON3_EXECUTABLE:FILEPATH=//p; s/^Python3_EXECUTABLE:FILEPATH=//p' | head -n1)
+if [ -n "${PY_FROM_CMAKE:-}" ] && [ -x "$PY_FROM_CMAKE" ]; then
+  echo "Using Python from CMake: $PY_FROM_CMAKE"
+  PYTHON_BIN="$PY_FROM_CMAKE"
+else
+  # Fallback: derive Python from PY_SITE cache entry
+  PY_SITE_FROM_CMAKE=$(echo "$CM_CACHE" | sed -n 's/^PY_SITE:PATH=//p' | head -n1)
+  if [ -n "${PY_SITE_FROM_CMAKE:-}" ]; then
+    # Expect pattern like /path/to/env/lib/python3.13/site-packages
+    py_lib_dir=$(dirname "$PY_SITE_FROM_CMAKE") # .../lib/python3.13
+    env_lib_dir=$(dirname "$py_lib_dir")        # .../lib
+    env_root=$(dirname "$env_lib_dir")          # .../env
+    # Try version-specific python first
+    py_ver=$(basename "$py_lib_dir")            # python3.13
+    cand1="$env_root/bin/$py_ver"
+    cand2="$env_root/bin/python3"
+    cand3="$env_root/bin/python"
+    for cand in "$cand1" "$cand2" "$cand3"; do
+      if [ -x "$cand" ]; then
+        echo "Derived Python from PY_SITE: $cand"
+        PYTHON_BIN="$cand"
+        break
+      fi
+    done
+  fi
+fi
+
 # Run test
 echo "Running C++ test executable..."
 # Allow C++ test to fail without aborting the entire script

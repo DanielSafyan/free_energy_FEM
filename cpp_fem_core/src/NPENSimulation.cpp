@@ -20,6 +20,76 @@ NPENSimulation::NPENSimulation(std::shared_ptr<TetrahedralMesh> mesh, double dt,
     initializeMatrices();
 }
 
+Eigen::SparseMatrix<double> NPENSimulation::assembleWeightedStiffness(const Eigen::VectorXd& weight) const {
+    const size_t numNodes = m_mesh->numNodes();
+    const size_t numElements = m_mesh->numElements();
+    std::vector<Eigen::Triplet<double>> trips;
+    trips.reserve(numElements * 16);
+
+    const Eigen::MatrixXi& elems = m_mesh->getElements();
+    for (size_t e = 0; e < numElements; ++e) {
+        const ElementData& ed = m_mesh->getElementData(e);
+        const double vol = ed.volume;
+
+        int n0 = elems(e, 0), n1 = elems(e, 1), n2 = elems(e, 2), n3 = elems(e, 3);
+        double w_avg = 0.25 * (weight(n0) + weight(n1) + weight(n2) + weight(n3));
+
+        // Local 4x4 contribution: w_avg * (gradNi · gradNj) * vol
+        for (int i = 0; i < 4; ++i) {
+            int ni = (i == 0 ? n0 : i == 1 ? n1 : i == 2 ? n2 : n3);
+            const Eigen::RowVector3d gi = ed.grads.row(i);
+            for (int j = 0; j < 4; ++j) {
+                int nj = (j == 0 ? n0 : j == 1 ? n1 : j == 2 ? n2 : n3);
+                const Eigen::RowVector3d gj = ed.grads.row(j);
+                double val = w_avg * gi.dot(gj) * vol;
+                trips.emplace_back(ni, nj, val);
+            }
+        }
+    }
+
+    Eigen::SparseMatrix<double> K(numNodes, numNodes);
+    K.setFromTriplets(trips.begin(), trips.end());
+    K.makeCompressed();
+    return K;
+}
+
+Eigen::SparseMatrix<double> NPENSimulation::assembleConvectionMatrix(const Eigen::VectorXd& phi, double prefactor) const {
+    const size_t numNodes = m_mesh->numNodes();
+    const size_t numElements = m_mesh->numElements();
+    std::vector<Eigen::Triplet<double>> trips;
+    trips.reserve(numElements * 16);
+
+    const Eigen::MatrixXi& elems = m_mesh->getElements();
+    for (size_t e = 0; e < numElements; ++e) {
+        const ElementData& ed = m_mesh->getElementData(e);
+        const double vol = ed.volume;
+        int n0 = elems(e, 0), n1 = elems(e, 1), n2 = elems(e, 2), n3 = elems(e, 3);
+
+        // phi values on element
+        Eigen::Vector4d phi_loc;
+        phi_loc << phi(n0), phi(n1), phi(n2), phi(n3);
+        // grad(phi) is constant per linear tetra
+        Eigen::Vector3d grad_phi = ed.grads.transpose() * phi_loc;
+
+        // Entry A_ij = prefactor * (grad_phi · grad N_i) * ∫ N_j dΩ, with ∫ N_j dΩ = vol/4
+        const double intNj = vol * 0.25;
+        for (int i = 0; i < 4; ++i) {
+            int ni = (i == 0 ? n0 : i == 1 ? n1 : i == 2 ? n2 : n3);
+            double rowFactor = prefactor * ed.grads.row(i).dot(grad_phi) * intNj;
+            // same value distributes to all j for this element
+            trips.emplace_back(ni, n0, rowFactor);
+            trips.emplace_back(ni, n1, rowFactor);
+            trips.emplace_back(ni, n2, rowFactor);
+            trips.emplace_back(ni, n3, rowFactor);
+        }
+    }
+
+    Eigen::SparseMatrix<double> C(numNodes, numNodes);
+    C.setFromTriplets(trips.begin(), trips.end());
+    C.makeCompressed();
+    return C;
+}
+
 void NPENSimulation::initializeMatrices() {
     size_t numNodes = m_mesh->numNodes();
     
@@ -45,45 +115,116 @@ void NPENSimulation::initializeMatrices() {
     // Solvers will be computed on-demand in the step functions
 }
 
-void NPENSimulation::step(const Eigen::VectorXd& c_prev, const Eigen::VectorXd& c3_prev, 
+void NPENSimulation::step(const Eigen::VectorXd& c_prev, const Eigen::VectorXd& c3_prev,
                           const Eigen::VectorXd& phi_prev,
-                          Eigen::VectorXd& c_next, Eigen::VectorXd& c3_next, 
+                          Eigen::VectorXd& c_next, Eigen::VectorXd& c3_next,
                           Eigen::VectorXd& phi_next) {
-    size_t numNodes = m_mesh->numNodes();
-    
-    // Initialize residuals
-    Eigen::VectorXd residual_c = Eigen::VectorXd::Zero(numNodes);
-    Eigen::VectorXd residual_c3 = Eigen::VectorXd::Zero(numNodes);
-    Eigen::VectorXd residual_phi = Eigen::VectorXd::Zero(numNodes);
-    
-    // Assemble residuals and Jacobians
-    assembleResidualAndJacobian(c_prev, c3_prev, phi_prev, c_prev, c3_prev,
-                                residual_c, residual_c3, residual_phi);
-    
-    // Solve for updates (simplified implementation)
-    // In a full implementation, we would assemble the full Jacobian matrix
-    // and solve the coupled system
-    
-    // Check if solvers are initialized properly
-    if (m_solver_c.info() != Eigen::Success || 
-        m_solver_c3.info() != Eigen::Success || 
-        m_solver_phi.info() != Eigen::Success) {
-        // If solvers failed, return previous values
-        c_next = c_prev;
-        c3_next = c3_prev;
-        phi_next = phi_prev;
-        return;
+    const int N = static_cast<int>(m_mesh->numNodes());
+    // Start from previous state
+    Eigen::VectorXd c = c_prev;
+    Eigen::VectorXd c3 = c3_prev;
+    Eigen::VectorXd phi = phi_prev;
+
+    // Dimensionless parameters
+    const double D_c = std::max({m_D1, m_D2, m_D3});
+    const double D1_dim = m_D1 / D_c;
+    const double D2_dim = m_D2 / D_c;
+    const double D3_dim = m_D3 / D_c;
+    const double dt_dim = m_dt * D_c / (m_L_c * m_L_c);
+
+    const int max_iter = 25;
+    const double rtol = 1e-6, atol = 1e-12;
+    double initial_residual_norm = -1.0;
+
+    for (int it = 0; it < max_iter; ++it) {
+        // Build Jacobian blocks
+        Eigen::SparseMatrix<double> J_cc_drift = assembleConvectionMatrix(phi, D1_dim * m_z1);
+        // Weighted stiffness blocks treating c as coefficient
+        Eigen::VectorXd w_cphi = (D1_dim * m_z1) * c;
+        Eigen::SparseMatrix<double> K_c_phi = assembleWeightedStiffness(w_cphi);
+        Eigen::VectorXd w_phiphi = (D1_dim + D2_dim) * c;
+        Eigen::SparseMatrix<double> K_phi_phi = assembleWeightedStiffness(w_phiphi);
+
+        Eigen::SparseMatrix<double> J11 = (1.0 / dt_dim) * m_M_c + D1_dim * m_K_c + J_cc_drift;
+        Eigen::SparseMatrix<double> J13 = K_c_phi;
+        Eigen::SparseMatrix<double> J22 = (1.0 / dt_dim) * m_M_c + D3_dim * m_K_c;
+        Eigen::SparseMatrix<double> J31 = -(D1_dim - D2_dim) * m_K_c;
+        Eigen::SparseMatrix<double> J33 = K_phi_phi;
+
+        // Residuals
+        Eigen::VectorXd R_c   = (1.0 / dt_dim) * (m_M_c * (c  - c_prev)) + D1_dim * (m_K_c * c)  + K_c_phi   * phi;
+        Eigen::VectorXd R_c3  = (1.0 / dt_dim) * (m_M_c * (c3 - c3_prev)) + D3_dim * (m_K_c * c3);
+        Eigen::VectorXd R_phi = K_phi_phi * phi + (-(D1_dim - D2_dim)) * (m_K_c * c);
+
+        // Assemble big Jacobian via triplets
+        std::vector<Eigen::Triplet<double>> trips;
+        trips.reserve(J11.nonZeros() + J13.nonZeros() + J22.nonZeros() + J31.nonZeros() + J33.nonZeros());
+        auto appendBlock = [&](const Eigen::SparseMatrix<double>& A, int r0, int c0) {
+            for (int k = 0; k < A.outerSize(); ++k) {
+                for (Eigen::SparseMatrix<double>::InnerIterator it(A, k); it; ++it) {
+                    trips.emplace_back(r0 + it.row(), c0 + it.col(), it.value());
+                }
+            }
+        };
+        appendBlock(J11, 0, 0);
+        appendBlock(J13, 0, N);
+        appendBlock(J22, N, N);
+        appendBlock(J31, 2 * N, 0);
+        appendBlock(J33, 2 * N, 2 * N);
+
+        // Stack residuals
+        Eigen::VectorXd R(3 * N);
+        R.segment(0, N) = R_c;
+        R.segment(N, N) = R_c3;
+        R.segment(2 * N, N) = R_phi;
+
+        // Apply a Dirichlet anchor for phi at node 0: phi(0) = 0 (to fix gauge)
+        const int anchorRow = 2 * N + 0;
+        std::vector<Eigen::Triplet<double>> tripsFiltered;
+        tripsFiltered.reserve(trips.size());
+        for (const auto& t : trips) {
+            if (t.row() != anchorRow) tripsFiltered.push_back(t);
+        }
+        tripsFiltered.emplace_back(anchorRow, anchorRow, 1.0);
+        R(anchorRow) = phi(0) - 0.0;
+
+        Eigen::SparseMatrix<double> J(3 * N, 3 * N);
+        J.setFromTriplets(tripsFiltered.begin(), tripsFiltered.end());
+        J.makeCompressed();
+
+        // Solve J * delta = -R
+        Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
+        solver.analyzePattern(J);
+        solver.factorize(J);
+        if (solver.info() != Eigen::Success) {
+            // Fallback: leave state unchanged
+            c_next = c_prev; c3_next = c3_prev; phi_next = phi_prev;
+            return;
+        }
+        Eigen::VectorXd delta = solver.solve(-R);
+
+        // Update (simple under-relaxation for phi if desired)
+        const double alpha = 1.0;
+        const double alpha_phi = 1.0;
+        c   += alpha     * delta.segment(0, N);
+        c3  += alpha     * delta.segment(N, N);
+        phi += alpha_phi * delta.segment(2 * N, N);
+
+        // Convergence check on residual norm
+        double nrm = R.norm();
+        if (it == 0) initial_residual_norm = (nrm > 0 ? nrm : 1.0);
+        if (nrm < (initial_residual_norm * rtol) + atol) break;
     }
-    
-    c_next = c_prev - m_solver_c.solve(residual_c);
-    c3_next = c3_prev - m_solver_c3.solve(residual_c3);
-    phi_next = phi_prev - m_solver_phi.solve(residual_phi);
+
+    c_next = c;
+    c3_next = c3;
+    phi_next = phi;
 }
 
 void NPENSimulation::step2(const Eigen::VectorXd& c_prev, const Eigen::VectorXd& c3_prev, 
-                           const Eigen::VectorXd& phi_prev,
-                           const Eigen::VectorXi& electrode_indices, 
-                           const Eigen::VectorXd& applied_voltages,
+                            const Eigen::VectorXd& phi_prev,
+                            const Eigen::VectorXi& electrode_indices, 
+                            const Eigen::VectorXd& applied_voltages,
                            Eigen::VectorXd& c_next, Eigen::VectorXd& c3_next, 
                            Eigen::VectorXd& phi_next,
                            double rtol, double atol, int max_iter) {

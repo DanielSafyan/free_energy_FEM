@@ -70,6 +70,15 @@ private:
         const Eigen::VectorXd& c, const Eigen::VectorXd& c3, const Eigen::VectorXd& phi,
         const Eigen::VectorXd& c_prev, const Eigen::VectorXd& c3_prev,
         Eigen::VectorXd& residual_c, Eigen::VectorXd& residual_c3, Eigen::VectorXd& residual_phi);
+
+    // Helpers to assemble variable-coefficient matrices for Jacobian construction
+    // Weighted stiffness: builds matrix for \int w * (\nabla u \cdot \nabla v) d\Omega
+    Eigen::SparseMatrix<double> assembleWeightedStiffness(const Eigen::VectorXd& weight) const;
+
+    // Convection-like matrix for drift linearization:
+    // builds matrix with entries A_ij = prefactor * (\nabla phi \cdot \nabla N_i) * \int N_j d\Omega
+    // for linear tetrahedra, \int N_j d\Omega = volume / 4
+    Eigen::SparseMatrix<double> assembleConvectionMatrix(const Eigen::VectorXd& phi, double prefactor) const;
 };
 
 #endif // NPEN_SIMULATION_HPP

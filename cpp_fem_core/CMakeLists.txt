@@ -17,6 +17,15 @@ execute_process(
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
+# Cache Python info so external scripts can retrieve it reliably
+set(PY_SITE "${PY_SITE}" CACHE PATH "Python site-packages for install")
+if (DEFINED Python3_EXECUTABLE)
+  set(PYTHON3_EXECUTABLE "${Python3_EXECUTABLE}" CACHE FILEPATH "Python3 executable used by CMake")
+endif()
+if (DEFINED Python3_VERSION)
+  set(PYTHON3_VERSION "${Python3_VERSION}" CACHE STRING "Python3 version used by CMake")
+endif()
+
 # Find required packages
 find_package(Eigen3 REQUIRED)
 
