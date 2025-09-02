@@ -28,7 +28,7 @@ public:
                const Eigen::VectorXd& applied_voltages,
                Eigen::VectorXd& c_next, Eigen::VectorXd& c3_next, 
                Eigen::VectorXd& phi_next,
-               double rtol = 1e-3, double atol = 1e-14, int max_iter = 50);
+               double rtol = 1e-3, double atol = 1e-14, int max_iter = 50, double k_reaction = 0.5);
     
     // Getters for physical constants
     double getPhiC() const { return m_phi_c; }

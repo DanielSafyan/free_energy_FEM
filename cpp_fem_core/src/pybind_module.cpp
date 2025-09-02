@@ -43,14 +43,15 @@ PYBIND11_MODULE(fem_core_py, m) {
                           const Eigen::VectorXd& phi_prev,
                           const Eigen::VectorXi& electrode_indices,
                           const Eigen::VectorXd& applied_voltages,
-                          double rtol = 1e-3, double atol = 1e-14, int max_iter = 50) {
+                          double rtol = 1e-3, double atol = 1e-14, int max_iter = 50, double k_reaction = 0.5) {
             Eigen::VectorXd c_next(c_prev.size()), c3_next(c3_prev.size()), phi_next(phi_prev.size());
             self.step2(c_prev, c3_prev, phi_prev, electrode_indices, applied_voltages,
-                       c_next, c3_next, phi_next, rtol, atol, max_iter);
+                       c_next, c3_next, phi_next, rtol, atol, max_iter, k_reaction);
             return std::make_tuple(c_next, c3_next, phi_next);
         }, py::arg("c_prev"), py::arg("c3_prev"), py::arg("phi_prev"),
            py::arg("electrode_indices"), py::arg("applied_voltages"),
-           py::arg("rtol") = 1e-3, py::arg("atol") = 1e-14, py::arg("max_iter") = 50)
+           py::arg("rtol") = 1e-3, py::arg("atol") = 1e-14, py::arg("max_iter") = 50,
+           py::arg("k_reaction") = 0.5)
         .def("getPhiC", &NPENSimulation::getPhiC)
         .def("getC0", &NPENSimulation::getC0);
 }

@@ -79,17 +79,17 @@ class HybridNPENwithFOReaction:
                 
                 # Call C++ step2 function
                 c_next, c3_next, phi_next = self.cpp_simulation.step2(
-                    c_prev, c3_prev, phi_prev, elec_indices, voltages, rtol, atol, max_iter)
+                    c_prev, c3_prev, phi_prev, elec_indices, voltages, rtol, atol, max_iter, k_reaction)
                 
                 return c_next, c3_next, phi_next
             except Exception as e:
                 print(f"C++ step2 failed, falling back to Python: {e}")
                 return self._sim.step2(c_initial, c3_initial, phi_initial, electrode_indices, applied_voltages, 
-                                     rtol, atol, max_iter, k_reaction)
+                                     k_reaction, rtol, atol, max_iter)
         else:
             # Use Python implementation
             return self._sim.step2(c_initial, c3_initial, phi_initial, electrode_indices, applied_voltages, 
-                                 rtol, atol, max_iter, k_reaction)
+                                 k_reaction, rtol, atol, max_iter)
 
     def __getattr__(self, name):
         """Delegate attribute access to the base simulation object"""

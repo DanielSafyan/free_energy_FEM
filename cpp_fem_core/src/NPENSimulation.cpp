@@ -227,7 +227,7 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev, const Eigen::VectorXd&
                             const Eigen::VectorXd& applied_voltages,
                            Eigen::VectorXd& c_next, Eigen::VectorXd& c3_next, 
                            Eigen::VectorXd& phi_next,
-                           double rtol, double atol, int max_iter) {
+                           double rtol, double atol, int max_iter, double k_reaction) {
     const int N = static_cast<int>(m_mesh->numNodes());
 
     // Initialize from previous state
@@ -243,7 +243,6 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev, const Eigen::VectorXd&
     const double dt_dim = m_dt * D_c / (m_L_c * m_L_c);
 
     // First-order reaction (dim-less); residual has -k*c, so diag adds -k
-    const double k_reaction = 0.5;
     const double k_reac_diag = -k_reaction * m_L_c / D_c;
 
     double initial_residual_norm = -1.0;
