@@ -8,7 +8,7 @@ import numpy as np
 
 # --- Constants ---
 # Screen dimensions
-SCREEN_WIDTH = 400
+SCREEN_WIDTH = 600
 SCREEN_HEIGHT = 600
 
 # Colors
@@ -63,8 +63,10 @@ class PongGame:
 
         # Set the initial velocity of the ball
         self.ball_velocity_x = BALL_SPEED_X
-        rnd = int(BALL_SPEED_Y * np.random.uniform(-1, 1))
-        self.ball_velocity_y = rnd if np.abs(rnd) > 1 else BALL_SPEED_Y * np.random.choice([-1, 1])
+        self.ball_velocity_y = int(np.random.choice([-5, -4, -3, 3, 4, 5]))
+        if abs(self.ball_velocity_y) == 5:
+            # Avoid perfectly circular/diagonal paths when |vy| == |vx|
+            self.ball_velocity_x = BALL_SPEED_X - 1
 
         # Game state variables
         self.score = 0

@@ -339,7 +339,7 @@ class PongSimulationNPEN:
 
     def __init__(self,
                  Lx=1.0, Ly=1.0, Lz=0.25,
-                 screen_width=400, screen_height=600,
+                 screen_width=600, screen_height=600,
                  R=8.314, T=298.0, F=96485.33,
                  epsilon=80 * 8.854e-12,
                  D1=1e-9, D2=1e-9, D3=1e-9,
@@ -608,13 +608,13 @@ class PongSimulationNPEN:
                     pong_game = PongGame(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, False)
                     if rl:
                         # give chaotic signals to increase plasticity for a short time
+                        # invert voltage pattern
+                        voltage_pattern = [0] * 12
+                        for i in range(6): voltage_pattern[2*i+1] = self.applied_voltage
+                        
+                        measuring_pattern = [0, measuring_voltage, 0, measuring_voltage, 0, measuring_voltage]
+                        voltage_amount = measuring_pattern + voltage_pattern
                         for _ in range(rl_steps):
-                            # invert voltage pattern
-                            voltage_pattern = [0] * 12
-                            for i in range(6): voltage_pattern[2*i+1] = self.applied_voltage
-                            measuring_pattern = [0, measuring_voltage, 0, measuring_voltage, 0, measuring_voltage]
-                            voltage_amount = measuring_pattern + voltage_pattern
-
                             c_prev, c3_prev = c.copy(), c3.copy()
                             c, c3, phi = self.sim.step2(
                                 c_prev, c3_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
@@ -641,7 +641,7 @@ class PongSimulationNPEN:
 
                 # Measure current and update platform
                 measured_current = calculate_current(c, c3, phi, [self.voltage_indices[0], self.voltage_indices[2], self.voltage_indices[4]])
-                plat_pos = calculate_platform_position(measured_current)
+                plat_pos = calculate_platform_position2(measured_current, self.SCREEN_HEIGHT)
                 pong_game.set_platform_position(int(plat_pos))
 
                 # Log step
@@ -662,7 +662,7 @@ class PongSimulationNPEN:
                 pass
 
 
-def calculate_platform_position(measured_current):
+def calculate_platform_position(measured_current, screen_height):
 
     measured_current = np.abs(np.array(measured_current))
     denominator = np.sum(measured_current)
@@ -671,7 +671,23 @@ def calculate_platform_position(measured_current):
     I1 = measured_current[0]/denominator
     I2 = measured_current[1]/denominator
     I3 = measured_current[2]/denominator
-    return np.floor(I1*0 + I2*200 + I3*400)
+    # Map to 3 equally spaced vertical anchors: 0, H/3, 2H/3
+    h_third = float(screen_height) / 3.0
+    return np.floor(I1*0 + I2*h_third + I3*(2.0*h_third))
+
+def calculate_platform_position2(measured_current, screen_height):
+    measured_current = np.abs(np.array(measured_current))
+    denominator = np.sum(measured_current)
+    if denominator == 0:
+        raise ValueError("Denominator is zero")
+    I1 = measured_current[0]/denominator
+    I2 = measured_current[1]/denominator
+    I3 = measured_current[2]/denominator
+    # Map to 3 equally spaced vertical anchors: 0, H/3, 2H/3
+    h_third = float(screen_height) / 3.0
+    # Max of 2nd degree polynomial through points
+    a,b,c = np.polyfit([0, h_third, 2*h_third], [I1, I2, I3], 2)
+    return np.floor(-b/(2*a))
 
 if __name__ == "__main__":
     sim_runner = PongSimulationNPEN(dt=0.1)
