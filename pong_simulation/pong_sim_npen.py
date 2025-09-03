@@ -687,7 +687,9 @@ def calculate_platform_position2(measured_current, screen_height):
     h_third = float(screen_height) / 3.0
     # Max of 2nd degree polynomial through points
     a,b,c = np.polyfit([0, h_third, 2*h_third], [I1, I2, I3], 2)
-    return np.floor(-b/(2*a))
+    x = np.linspace(0, screen_height, screen_height)
+    y = a*x**2 + b*x + c
+    return np.argmax(y)
 
 if __name__ == "__main__":
     sim_runner = PongSimulationNPEN(dt=0.1)
