@@ -684,7 +684,7 @@ def calculate_platform_position2(measured_current, screen_height):
     I2 = measured_current[1]/denominator
     I3 = measured_current[2]/denominator
     # Map to 3 equally spaced vertical anchors: 0, H/3, 2H/3
-    h_third = np.floor(float(screen_height) / 3.0)
+    h_third = screen_height // 3
     # Max of 2nd degree polynomial through points
     a,b,c = np.polyfit([0, h_third, 2*h_third], [I1, I2, I3], 2)
     x = np.linspace(0, 2*h_third, 2*h_third)
