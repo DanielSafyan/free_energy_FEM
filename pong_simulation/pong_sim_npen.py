@@ -553,7 +553,7 @@ class PongSimulationNPEN:
         phi = np.zeros(self.mesh.num_nodes())
         return c, c3, phi
 
-    def run(self,rl=False, sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5, output_path=None, rl_steps=8):
+    def run(self,electrode_type="anode",activation = "poly_normed",rl=False, sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5, output_path=None, rl_steps=8):
         # Initialize pygame/game
         pygame.init()
         screen = pygame.display.set_mode((self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
@@ -640,8 +640,11 @@ class PongSimulationNPEN:
                     )
 
                 # Measure current and update platform
-                measured_current = calculate_current(c, c3, phi, [self.voltage_indices[1], self.voltage_indices[3], self.voltage_indices[5]])
-                plat_pos = calculate_platform_position2(measured_current, self.SCREEN_HEIGHT)
+                if electrode_type == "cathode":
+                    measured_current = calculate_current(c, c3, phi, [self.voltage_indices[1], self.voltage_indices[3], self.voltage_indices[5]])
+                elif electrode_type == "anode":
+                    measured_current = calculate_current(c, c3, phi, [self.voltage_indices[0], self.voltage_indices[2], self.voltage_indices[4]])
+                plat_pos = calculate_platform_position2(measured_current, self.SCREEN_HEIGHT, activation=activation)
                 pong_game.set_platform_position(int(plat_pos))
 
                 # Log step
@@ -675,21 +678,29 @@ def calculate_platform_position(measured_current, screen_height):
     h_third = float(screen_height) / 3.0
     return np.floor(I1*0 + I2*h_third + I3*(2.0*h_third))
 
-def calculate_platform_position2(measured_current, screen_height):
-    measured_current = np.abs(np.array(measured_current))
-    denominator = np.sum(measured_current)
-    if denominator == 0:
-        raise ValueError("Denominator is zero")
-    I1 = measured_current[0]/denominator
-    I2 = measured_current[1]/denominator
-    I3 = measured_current[2]/denominator
-    # Map to 3 equally spaced vertical anchors: 0, H/3, 2H/3
-    h_third = screen_height // 3
-    # Max of 2nd degree polynomial through points
-    a,b,c = np.polyfit([0, h_third, 2*h_third], [I1, I2, I3], 2)
-    x = np.linspace(0, 2*h_third, 2*h_third)
-    y = a*x**2 + b*x + c
-    return np.argmax(y)
+def calculate_platform_position2(measured_current, screen_height, activation="poly_normed"):
+    if activation == "poly_normed" or activation == "poly_absolute":
+        measured_current = np.abs(np.array(measured_current))
+        denominator = np.sum(measured_current)
+        if denominator == 0:
+            raise ValueError("Denominator is zero")
+        if activation == "poly_absolute":
+            denominator = 1.0
+        I1 = measured_current[0]/denominator
+        I2 = measured_current[1]/denominator
+        I3 = measured_current[2]/denominator
+        # Map to 3 equally spaced vertical anchors: 0, H/3, 2H/3
+        h_third = screen_height // 3    
+        # Max of 2nd degree polynomial through points
+        a,b,c = np.polyfit([0, h_third, 2*h_third], [I1, I2, I3], 2)
+        x = np.linspace(0, 2*h_third, 2*h_third)
+        y = a*x**2 + b*x + c
+        return np.argmax(y)
+    elif activation == "average":
+        return calculate_platform_position(measured_current, screen_height)
+    else:
+        raise ValueError("Invalid activation: " + activation)
+    
 
 if __name__ == "__main__":
     sim_runner = PongSimulationNPEN(dt=0.1)
