@@ -694,7 +694,7 @@ def calculate_platform_position2(measured_current, screen_height, activation="po
         # Max of 2nd degree polynomial through points
         a,b,c = np.polyfit([0, h_third, 2*h_third], [I1, I2, I3], 2)
         x_space = np.linspace(0, 2*h_third, 2*h_third)
-        return np.argmax(a*x_space**2 + b*x_space + c)
+        return np.argmax(a*x_space**2 + b*x_space)
     elif activation == "average":
         return calculate_platform_position(measured_current, screen_height)
     else:
