@@ -640,7 +640,7 @@ class PongSimulationNPEN:
                     )
 
                 # Measure current and update platform
-                measured_current = calculate_current(c, c3, phi, [self.voltage_indices[0], self.voltage_indices[2], self.voltage_indices[4]])
+                measured_current = calculate_current(c, c3, phi, [self.voltage_indices[1], self.voltage_indices[3], self.voltage_indices[5]])
                 plat_pos = calculate_platform_position2(measured_current, self.SCREEN_HEIGHT)
                 pong_game.set_platform_position(int(plat_pos))
 
