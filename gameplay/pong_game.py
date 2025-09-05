@@ -241,7 +241,7 @@ class PongGame:
         
         # Define the grid area in front of the platform
         # Platform is at x=30, width=15, so platform right edge is at x=45
-        grid_left = self.paddle.right  # Start right after the platform
+        grid_left = 0  # Start right after the platform
         grid_right = self.screen_width  # Extend to the right wall
         grid_top = 0
         grid_bottom = self.screen_height
