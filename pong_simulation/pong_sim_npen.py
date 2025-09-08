@@ -195,6 +195,58 @@ def load_pong_h5(path: str = os.path.join("output", "pong_simulation.h5"), eager
         }
     return data
 
+def get_last_state_from_h5(path: str):
+    """Return the last state of the fields and game from an NPEN HDF5 file.
+
+    Returns a dict with keys:
+      - 'c': np.ndarray (N,)
+      - 'c3': np.ndarray (N,)
+      - 'phi': np.ndarray (N,)
+      - 'ball_pos_xy': tuple(float, float)
+      - 'platform_pos': float
+      - 'score': Optional[int]
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Checkpoint file not found: {path}")
+
+    with PongH5Reader(path) as data:
+        num_states = int(data.c.shape[0])
+        if num_states == 0:
+            raise ValueError("Checkpoint contains no states to resume from.")
+        t_last = num_states - 1
+
+        # Extract last field states
+        c_last = np.array(data.c[t_last])
+        c3_last = np.array(data.c3[t_last])
+        phi_last = np.array(data.phi[t_last])
+
+        # Extract last game state
+        try:
+            ball_last = tuple(np.array(data.ball_pos[t_last]).tolist())
+        except Exception as e:
+            raise ValueError(f"Failed to read last ball position: {e}")
+        try:
+            platform_last = float(np.array(data.platform_pos[t_last]))
+        except Exception as e:
+            raise ValueError(f"Failed to read last platform position: {e}")
+
+        score_last = None
+        if getattr(data, "score", None) is not None:
+            if data.score.shape[0] > 0:
+                try:
+                    score_last = int(np.array(data.score[t_last]))
+                except Exception:
+                    score_last = None
+
+    return {
+        "c": c_last,
+        "c3": c3_last,
+        "phi": phi_last,
+        "ball_pos_xy": ball_last,
+        "platform_pos": platform_last,
+        "score": score_last,
+    }
+
 def init_voltage():
     # Deprecated in favor of PongSimulation._init_voltage()
     raise NotImplementedError("Use PongSimulation._init_voltage() which uses instance nx, ny, nz.")
@@ -553,7 +605,7 @@ class PongSimulationNPEN:
         phi = np.zeros(self.mesh.num_nodes())
         return c, c3, phi
 
-    def run(self,electrode_type="anode",activation = "poly_normed",rl=False, sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5, output_path=None, rl_steps=8):
+    def run(self,electrode_type="anode",activation = "poly_normed",rl=False, sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5, output_path=None, rl_steps=8, checkpoint=None):
         # Initialize pygame/game
         pygame.init()
         screen = pygame.display.set_mode((self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
@@ -561,8 +613,33 @@ class PongSimulationNPEN:
         clock = pygame.time.Clock()
         pong_game = PongGame(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, False)
 
-        # Initial states (NPEN: c, c3, phi)
-        c, c3, phi = self._init_conditions()
+        # Initial states (NPEN: c, c3, phi). If a checkpoint is provided, restore from it.
+        if checkpoint is not None:
+            last = get_last_state_from_h5(checkpoint)
+            c, c3, phi = last["c"], last["c3"], last["phi"]
+            # Validate compatibility with current mesh
+            if c.shape[0] != self.mesh.num_nodes():
+                raise ValueError(
+                    f"Checkpoint node count ({c.shape[0]}) does not match current mesh ({self.mesh.num_nodes()})."
+                )
+            # Restore game state
+            try:
+                pong_game.set_platform_position(int(last["platform_pos"]))
+            except Exception:
+                pass
+            try:
+                bx, by = last["ball_pos_xy"]
+                pong_game.ball.x = int(bx)
+                pong_game.ball.y = int(by)
+            except Exception:
+                pass
+            if last.get("score") is not None:
+                try:
+                    pong_game.score = int(last["score"])
+                except Exception:
+                    pass
+        else:
+            c, c3, phi = self._init_conditions()
 
         # HDF5
         meta = {
