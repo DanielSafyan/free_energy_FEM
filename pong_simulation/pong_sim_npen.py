@@ -390,16 +390,16 @@ class PongSimulationNPEN:
     """
 
     def __init__(self,
-                 Lx=1.0, Ly=1.0, Lz=0.25,
+                 Lx=4.0, Ly=4.0, Lz=1.0,
                  screen_width=600, screen_height=600,
                  R=8.314, T=298.0, F=96485.33,
                  epsilon=80 * 8.854e-12,
                  D1=1e-9, D2=1e-9, D3=1e-9,
                  z1=1, z2=-1,
                  chi=0.0,
-                 applied_voltage=1e-1,
+                 applied_voltage=20,
                  c0=10.0,
-                 L_c=1e-3,
+                 L_c=1e-2,
                  dt=1e-2,
                  nx=16, ny=16, nz=4,
                  experiment="random"):
