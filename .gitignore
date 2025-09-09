@@ -18,6 +18,8 @@ ipython_config.py
 *.npz
 *.h5
 *.xdmf
+*.pdf
+*.mat
 
 # C++ build files
 build
