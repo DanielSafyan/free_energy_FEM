@@ -7,6 +7,10 @@ dependencies:
   - hdf5
   - pip
   - pip:
+    - tqdm
+    - pygame
+    - pygame_gui
+    - h5py
     - numpy
     - scipy
     - matplotlib
