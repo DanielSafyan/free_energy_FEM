@@ -61,7 +61,7 @@ def gridsearch_loop(
 
             try:
                 runner = PongSimulationNPEN(dt=dt,
-                                            voltage=voltage,
+                                            applied_voltage=voltage,
                                             nx=size[0],
                                             ny=size[1],
                                             nz=size[2])
