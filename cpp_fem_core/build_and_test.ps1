@@ -1,7 +1,8 @@
 param(
   [string]$Config = $(if ($env:CONFIG) { $env:CONFIG } else { 'Release' }),
   [string]$Generator = $(if ($env:GENERATOR) { $env:GENERATOR } else { '' }),
-  [string]$Arch = $(if ($env:ARCH) { $env:ARCH } else { '' })
+  [string]$Arch = $(if ($env:ARCH) { $env:ARCH } else { '' }),
+  [string]$GeneratorInstance = $(if ($env:CMAKE_GENERATOR_INSTANCE) { $env:CMAKE_GENERATOR_INSTANCE } else { '' })
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,6 +48,38 @@ if ($env:VCPKG_ROOT -and (Test-Path "$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.
   Write-Host "Using vcpkg toolchain: $toolchain"
 }
 
+# Resolve Visual Studio instance if using VS generator
+$vsInstance = $GeneratorInstance
+if (-not $vsInstance -and $Generator -like 'Visual Studio*17*') {
+  $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+  if (Test-Path $vswhere) {
+    try {
+      $vsPath = & $vswhere -products * -all -prerelease -latest `
+        -requires Microsoft.Component.MSBuild `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath
+      if ($vsPath) {
+        $vsInstance = $vsPath.Trim()
+        Write-Host "Detected Visual Studio instance via vswhere: $vsInstance"
+      }
+    } catch {
+      Write-Warning "vswhere detection failed: $($_.Exception.Message)"
+    }
+  }
+  if (-not $vsInstance) {
+    $candidates = @(
+      "C:\Program Files\Microsoft Visual Studio\2022\Community",
+      "C:\Program Files\Microsoft Visual Studio\2022\Professional",
+      "C:\Program Files\Microsoft Visual Studio\2022\Enterprise",
+      "C:\Program Files\Microsoft Visual Studio\2022\BuildTools",
+      "C:\Program Files\Microsoft Visual Studio\2022\Preview"
+    )
+    foreach ($p in $candidates) {
+      if (Test-Path $p) { $vsInstance = $p; Write-Host "Using Visual Studio instance: $vsInstance"; break }
+    }
+  }
+}
+
 # Create and enter build dir
 New-Item -ItemType Directory -Force -Path "build" | Out-Null
 Set-Location "build"
@@ -62,6 +95,7 @@ if ($toolchain) { $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=`"$toolchain`"" }
 if ($Generator) {
   $cmakeArgs = @('-G', $Generator) + $cmakeArgs
   if ($Arch) { $cmakeArgs = @('-A', $Arch) + $cmakeArgs }
+  if ($vsInstance) { $cmakeArgs += "-DCMAKE_GENERATOR_INSTANCE=`"$vsInstance`"" }
 }
 
 Write-Host "Configuring with CMake (HDF5 disabled by default; set DISABLE_HDF5=OFF to enable detection)"
