@@ -17,7 +17,7 @@ def gridsearch_loop(
     rl_list=[False],
     rl_steps_list=[8],
     dt_list=[0.001],
-    voltage_list=[1.0],
+    voltage_list=[20.0],
     dt_st_pair_list=[None],        #[(0.001, 1), (0.0005, 2), (0.00025, 4)],
     size_list=[(16,16,4), (32,32,4)],
     output_dir="metasimulation/output",
