@@ -1,4 +1,4 @@
-name: fem_cpp_env
+name: sim_env
 dependencies:
   - python=3.13
   - cmake

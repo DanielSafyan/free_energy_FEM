@@ -605,7 +605,9 @@ class PongSimulationNPEN:
         phi = np.zeros(self.mesh.num_nodes())
         return c, c3, phi
 
-    def run(self,electrode_type="anode",activation = "poly_normed",rl=False, sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5, output_path=None, rl_steps=8, checkpoint=None):
+    def run(self, electrode_type="anode",activation = "poly_normed",rl=False,
+            rl_steps=8,sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5,
+            output_path=None, checkpoint=None):
         # Initialize pygame/game
         pygame.init()
         screen = pygame.display.set_mode((self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
