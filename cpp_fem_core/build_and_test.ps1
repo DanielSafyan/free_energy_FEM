@@ -31,11 +31,12 @@ try {
 import sys
 try:
     import pybind11
-    print(pybind11.get_cmake_dir(), end="")
+    print(pybind11.get_cmake_dir())
 except Exception:
     pass
 '@
   $pybind11Dir = & $pythonPath -c $code
+  if ($pybind11Dir) { $pybind11Dir = $pybind11Dir.Trim() }
 } catch {}
 if ($pybind11Dir) { Write-Host "Detected pybind11 CMake dir: $pybind11Dir" }
 
@@ -48,16 +49,24 @@ if ($env:VCPKG_ROOT -and (Test-Path "$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.
   Write-Host "Using vcpkg toolchain: $toolchain"
 }
 
-# Resolve Visual Studio instance if using VS generator
+# Resolve Visual Studio instance if using a VS generator
 $vsInstance = $GeneratorInstance
-if (-not $vsInstance -and $Generator -like 'Visual Studio*17*') {
+if (-not $vsInstance -and $Generator -like 'Visual Studio*') {
   $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+  $vsVersionRange = ''
+  if ($Generator -like 'Visual Studio*17*') {
+    $vsVersionRange = '[17.0,18.0)'
+  } elseif ($Generator -like 'Visual Studio*16*') {
+    $vsVersionRange = '[16.0,17.0)'
+  }
   if (Test-Path $vswhere) {
     try {
-      $vsPath = & $vswhere -products * -all -prerelease -latest `
-        -requires Microsoft.Component.MSBuild `
-        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-        -property installationPath
+      $args = @('-products','*','-all','-prerelease','-latest',
+                '-requires','Microsoft.Component.MSBuild',
+                '-requires','Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+                '-property','installationPath')
+      if ($vsVersionRange) { $args = @('-version', $vsVersionRange) + $args }
+      $vsPath = & $vswhere @args
       if ($vsPath) {
         $vsInstance = $vsPath.Trim()
         Write-Host "Detected Visual Studio instance via vswhere: $vsInstance"
@@ -67,13 +76,24 @@ if (-not $vsInstance -and $Generator -like 'Visual Studio*17*') {
     }
   }
   if (-not $vsInstance) {
-    $candidates = @(
-      "C:\Program Files\Microsoft Visual Studio\2022\Community",
-      "C:\Program Files\Microsoft Visual Studio\2022\Professional",
-      "C:\Program Files\Microsoft Visual Studio\2022\Enterprise",
-      "C:\Program Files\Microsoft Visual Studio\2022\BuildTools",
-      "C:\Program Files\Microsoft Visual Studio\2022\Preview"
-    )
+    # Fallback to common install paths per major version
+    $candidates = @()
+    if ($vsVersionRange -eq '[17.0,18.0)') {
+      $candidates = @(
+        'C:\Program Files\Microsoft Visual Studio\2022\Community',
+        'C:\Program Files\Microsoft Visual Studio\2022\Professional',
+        'C:\Program Files\Microsoft Visual Studio\2022\Enterprise',
+        'C:\Program Files\Microsoft Visual Studio\2022\BuildTools',
+        'C:\Program Files\Microsoft Visual Studio\2022\Preview'
+      )
+    } elseif ($vsVersionRange -eq '[16.0,17.0)') {
+      $candidates = @(
+        'C:\Program Files (x86)\Microsoft Visual Studio\2019\Community',
+        'C:\Program Files (x86)\Microsoft Visual Studio\2019\Professional',
+        'C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise',
+        'C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools'
+      )
+    }
     foreach ($p in $candidates) {
       if (Test-Path $p) { $vsInstance = $p; Write-Host "Using Visual Studio instance: $vsInstance"; break }
     }
@@ -100,10 +120,12 @@ if ($Generator) {
 
 Write-Host "Configuring with CMake (HDF5 disabled by default; set DISABLE_HDF5=OFF to enable detection)"
 cmake @cmakeArgs ..
+if ($LASTEXITCODE -ne 0) { Write-Error "CMake configure failed ($LASTEXITCODE)"; exit $LASTEXITCODE }
 
 # Build
 $buildArgs = @('--config', $Config, '-j')
 cmake --build . @buildArgs
+if ($LASTEXITCODE -ne 0) { Write-Error "CMake build failed ($LASTEXITCODE)"; exit $LASTEXITCODE }
 
 # Run test executable (handle single- and multi-config generators)
 Write-Host "Running C++ test executable..."
