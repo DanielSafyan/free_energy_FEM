@@ -4,6 +4,7 @@ from tqdm import tqdm
 import pygame
 import h5py
 import sys
+from enum import Enum
 
 
 
@@ -22,6 +23,12 @@ from utils.temporal_voltages import NPhasesVoltage
 from gameplay.pong_game import PongGame
 from simulations.electrode_3d_npp import get_node_idx as _unused_external_get_node_idx
 
+class VisionImpairmentType(Enum):
+    NONE = "NONE"
+    DELAYED = "DELAYED"
+    RANDOM_FULL = "RANDOM_FULL"
+    RANDOM_FIRSTROW = "RANDOM_FIRSTROW"
+ 
 # -----------------------------
 # HDF5 logging utilities
 # -----------------------------
@@ -607,7 +614,8 @@ class PongSimulationNPEN:
 
     def run(self, electrode_type="anode",activation = "poly_normed",rl=False,
             rl_steps=8,sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5,
-            output_path=None, checkpoint=None):
+            output_path=None, checkpoint=None,
+            vision_impairment_type: "VisionImpairmentType" = VisionImpairmentType.NONE):
         # Initialize pygame/game
         pygame.init()
         screen = pygame.display.set_mode((self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
@@ -657,6 +665,7 @@ class PongSimulationNPEN:
             "k_reaction": k_reaction,
             "applied_voltage": self.applied_voltage,
             "measuring_voltage": self.applied_voltage / 10.0,
+            "vision_impairment_type": str(vision_impairment_type.value),
         }
         h5f, dsets = self._init_h5_output(meta, constants, output_path)
         self._append_initial_state(dsets, pong_game, c, c3, phi)
@@ -674,7 +683,9 @@ class PongSimulationNPEN:
         c0 = self.c0
         sim = self.sim
 
+        ball_pos_prev = 10
         try:
+            
             for _ in tqdm(range(num_steps), desc="3D Simulation Progress"):
                 # Game update
                 for _ in range(game_ticks):
@@ -703,6 +714,28 @@ class PongSimulationNPEN:
 
                 # Sense ball position -> voltage pattern
                 ball_pos = pong_game.get_ball_block_index()
+                
+                # Vision-Impairment
+                if vision_impairment_type == VisionImpairmentType.NONE:
+                    pass
+                elif vision_impairment_type == VisionImpairmentType.DELAYED:
+                    if ball_pos == 10: 
+                        ball_pos_prev = ball_pos
+                    else:
+                        ball_tmp = ball_pos 
+                        ball_pos = ball_pos_prev
+                        ball_pos_prev = ball_tmp    
+                elif vision_impairment_type == VisionImpairmentType.RANDOM_FULL:
+                    ball_pos = np.random.randint(0, 5)
+                elif vision_impairment_type == VisionImpairmentType.RANDOM_FIRSTROW:
+                    if ball_pos in [0, 1, 2]:
+                        ball_pos = np.random.randint(0, 3)
+                else: 
+                    raise ValueError(f"Unknown vision impairment type: {vision_impairment_type}")
+                
+
+
+                
 
 
                 voltage_pattern = [np.nan] * 12

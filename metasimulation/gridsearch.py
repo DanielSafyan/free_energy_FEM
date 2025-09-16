@@ -4,7 +4,7 @@ import time
 import traceback
 from datetime import datetime
 
-from pong_simulation.pong_sim_npen import PongSimulationNPEN
+from pong_simulation.pong_sim_npen import PongSimulationNPEN, VisionImpairmentType
 
 
 def gridsearch_loop(
@@ -20,6 +20,8 @@ def gridsearch_loop(
     voltage_list=[20.0],
     dt_st_pair_list=[None],        #[(0.001, 1), (0.0005, 2), (0.00025, 4), (0.000125, 8)],
     size_list=[(16,16,4), (32,32,4)],
+    vision_impairment_type_list=[VisionImpairmentType.NONE],
+    checkpoint_list=[None],
     output_dir="metasimulation/output",
     sleep_between_runs=1.0,
 ):
@@ -27,14 +29,15 @@ def gridsearch_loop(
 
     combos = list(itertools.product(sim_ticks_list, game_ticks_list, num_steps_list, k_reaction_list,
                                     electrode_type_list, activation_list, rl_list, rl_steps_list,
-                                    dt_list, voltage_list, size_list, dt_st_pair_list))
+                                    dt_list, voltage_list, size_list, dt_st_pair_list,
+                                    vision_impairment_type_list, checkpoint_list))
     if not combos:
         raise ValueError("No parameter combinations provided")
 
     print(f"[gridsearch] Starting infinite loop over {len(combos)} combinations…")
 
     while True:
-        for sim_ticks, game_ticks, num_steps, k_reaction, electrode_type, activation, rl, rl_steps, dt, voltage, size, dt_st_pair in combos:
+        for sim_ticks, game_ticks, num_steps, k_reaction, electrode_type, activation, rl, rl_steps, dt, voltage, size, dt_st_pair, vision_impairment_type, checkpoint in combos:
 
 
             if dt_st_pair is not None:
@@ -42,7 +45,7 @@ def gridsearch_loop(
 
             ts_human = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(
-                f"[gridsearch] {ts_human} -> Run: sim_ticks={sim_ticks}, game_ticks={game_ticks}, num_steps={num_steps}, k_reaction={k_reaction}, electrode_type={electrode_type}, activation={activation}, rl={rl}, rl_steps={rl_steps}, dt={dt}, voltage={voltage}, size={size}"
+                f"[gridsearch] {ts_human} -> Run: sim_ticks={sim_ticks}, game_ticks={game_ticks}, num_steps={num_steps}, k_reaction={k_reaction}, electrode_type={electrode_type}, activation={activation}, rl={rl}, rl_steps={rl_steps}, dt={dt}, voltage={voltage}, size={size}, vision={getattr(vision_impairment_type, 'value', str(vision_impairment_type))}, checkpoint={checkpoint}"
             )
 
             # Build a unique, collision-resistant output file path
@@ -76,6 +79,8 @@ def gridsearch_loop(
                     rl=rl,
                     rl_steps=rl_steps,
                     output_path=out_path,
+                    vision_impairment_type=vision_impairment_type,
+                    checkpoint=checkpoint,
                 )
             except Exception as e:
                 print(f"[gridsearch] Run failed with error: {e}")

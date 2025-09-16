@@ -2,7 +2,9 @@ param(
   [string]$Config = $(if ($env:CONFIG) { $env:CONFIG } else { 'Release' }),
   [string]$Generator = $(if ($env:GENERATOR) { $env:GENERATOR } else { '' }),
   [string]$Arch = $(if ($env:ARCH) { $env:ARCH } else { '' }),
-  [string]$GeneratorInstance = $(if ($env:CMAKE_GENERATOR_INSTANCE) { $env:CMAKE_GENERATOR_INSTANCE } else { '' })
+  [string]$GeneratorInstance = $(if ($env:CMAKE_GENERATOR_INSTANCE) { $env:CMAKE_GENERATOR_INSTANCE } else { '' }),
+  [string]$CMakeCCompiler = $(if ($env:CMAKE_C_COMPILER) { $env:CMAKE_C_COMPILER } else { '' }),
+  [string]$CMakeCxxCompiler = $(if ($env:CMAKE_CXX_COMPILER) { $env:CMAKE_CXX_COMPILER } else { '' })
 )
 
 $ErrorActionPreference = 'Stop'
@@ -104,20 +106,43 @@ if (-not $vsInstance -and $Generator -like 'Visual Studio*') {
 New-Item -ItemType Directory -Force -Path "build" | Out-Null
 Set-Location "build"
 
+# Generator and compiler selection helpers
+if (-not $Generator) {
+  try { if (Get-Command ninja -ErrorAction Stop) { $Generator = 'Ninja' } } catch {}
+}
+if ($Generator -like '*Ninja*') {
+  if (-not $CMakeCCompiler -and -not $CMakeCxxCompiler) {
+    $cl = $null
+    try { $cl = Get-Command cl -ErrorAction Stop } catch {}
+    if ($cl) {
+      $CMakeCCompiler = 'cl'
+      $CMakeCxxCompiler = 'cl'
+      Write-Host "Detected MSVC 'cl' for Ninja; setting CMAKE_C_COMPILER/CMAKE_CXX_COMPILER to 'cl'."
+    } else {
+      Write-Warning "Ninja generator selected but no MSVC environment detected. Run VsDevCmd.bat (Developer PowerShell) or set CMAKE_C_COMPILER/CMAKE_CXX_COMPILER."
+    }
+  }
+}
+
 # Compose CMake configure args
 $cmakeArgs = @(
   "-DCMAKE_DISABLE_FIND_PACKAGE_HDF5=$disableHDF5",
-  "-DPython3_EXECUTABLE=`"$pythonPath`""
+  "-DPython3_EXECUTABLE=\"$pythonPath\""
 )
-if ($pybind11Dir) { $cmakeArgs += "-Dpybind11_DIR=`"$pybind11Dir`"" }
-if ($env:EIGEN3_INCLUDE_DIR) { $cmakeArgs += "-DEIGEN3_INCLUDE_DIR=`"$env:EIGEN3_INCLUDE_DIR`"" }
-if ($toolchain) { $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=`"$toolchain`"" }
+if ($pybind11Dir) { $cmakeArgs += "-Dpybind11_DIR=\"$pybind11Dir\"" }
+if ($env:EIGEN3_INCLUDE_DIR) { $cmakeArgs += "-DEIGEN3_INCLUDE_DIR=\"$env:EIGEN3_INCLUDE_DIR\"" }
+if ($toolchain) { $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=\"$toolchain\"" }
+if ($CMakeCCompiler) { $cmakeArgs += "-DCMAKE_C_COMPILER=\"$CMakeCCompiler\"" }
+if ($CMakeCxxCompiler) { $cmakeArgs += "-DCMAKE_CXX_COMPILER=\"$CMakeCxxCompiler\"" }
 if ($Generator) {
   $cmakeArgs = @('-G', $Generator) + $cmakeArgs
   if ($Arch) { $cmakeArgs = @('-A', $Arch) + $cmakeArgs }
-  if ($vsInstance) { $cmakeArgs += "-DCMAKE_GENERATOR_INSTANCE=`"$vsInstance`"" }
+  if ($vsInstance) { $cmakeArgs += "-DCMAKE_GENERATOR_INSTANCE=\"$vsInstance\"" }
 }
 
+Write-Host "Selected generator: $Generator"
+if ($vsInstance) { Write-Host "Generator instance: $vsInstance" }
+if ($CMakeCCompiler -or $CMakeCxxCompiler) { Write-Host "Compilers: C=$CMakeCCompiler CXX=$CMakeCxxCompiler" }
 Write-Host "Configuring with CMake (HDF5 disabled by default; set DISABLE_HDF5=OFF to enable detection)"
 cmake @cmakeArgs ..
 if ($LASTEXITCODE -ne 0) { Write-Error "CMake configure failed ($LASTEXITCODE)"; exit $LASTEXITCODE }
