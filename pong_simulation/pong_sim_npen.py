@@ -684,6 +684,7 @@ class PongSimulationNPEN:
         sim = self.sim
 
         ball_pos_prev = 10
+        ball_pos_rnd = 10
         try:
             
             for _ in tqdm(range(num_steps), desc="3D Simulation Progress"):
@@ -728,8 +729,16 @@ class PongSimulationNPEN:
                 elif vision_impairment_type == VisionImpairmentType.RANDOM_FULL:
                     ball_pos = np.random.randint(0, 5)
                 elif vision_impairment_type == VisionImpairmentType.RANDOM_FIRSTROW:
-                    if ball_pos in [0, 1, 2]:
-                        ball_pos = np.random.randint(0, 3)
+                    if ball_pos == 10: 
+                        ball_pos_prev = ball_pos
+                    elif ball_pos in [0,1,2]: 
+                        if ball_pos != ball_pos_prev:
+                            ball_pos_prev = ball_pos 
+                            ball_pos = np.random.randint(0, 3)
+                            ball_pos_rnd = ball_pos
+                        elif ball_pos == ball_pos_prev:
+                            ball_pos = ball_pos_rnd
+                        
                 else: 
                     raise ValueError(f"Unknown vision impairment type: {vision_impairment_type}")
                 
