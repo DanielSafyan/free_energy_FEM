@@ -606,9 +606,8 @@ class PongSimulationNPEN:
             c3 = np.full(self.mesh.num_nodes(), 0.5)
             c = 0.25 + np.random.uniform(-0.1, 0.1, self.mesh.num_nodes())
         else:
-            c3 = np.full(self.mesh.num_nodes(), 0.0)
+            c3 = np.full(self.mesh.num_nodes(), 0.5)
             c = np.full(self.mesh.num_nodes(), 0.5)
-            c[self.nodes[:, 0] < self.Lx / 2] = 0.4
         phi = np.zeros(self.mesh.num_nodes())
         return c, c3, phi
 
