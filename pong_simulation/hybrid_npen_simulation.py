@@ -44,17 +44,41 @@ class HybridNPENwithFOReaction:
         for attr in dir(self._sim):
             if not attr.startswith('__') and not callable(getattr(self._sim, attr)):
                 setattr(self, attr, getattr(self._sim, attr))
-        
-        # Temporarily disable C++ core until the NPEN interface is updated to 2-variable [c, phi]
-        self.use_cpp = False
-        if CPP_FEM_AVAILABLE:
-            print("C++ FEM core module found, but disabled due to API change (no c3). Using Python implementation.")
-        else:
-            print("C++ FEM core module not available. Using Python implementation.")
+
+        # Enable C++ core when available (2-variable [c, phi] API)
+        self.use_cpp = bool(CPP_FEM_AVAILABLE)
+        if self.use_cpp:
+            try:
+                # Construct C++ mesh and simulation using the provided mesh
+                self._cpp_mesh = fem_cpp.TetrahedralMesh(mesh.nodes, mesh.elements)
+                self._cpp_sim = fem_cpp.NPENSimulation(
+                    self._cpp_mesh, dt, D1, D2, D3, z1, z2, epsilon, R, T, L_c, c0
+                )
+                print("C++ FEM core initialized for NPEN.")
+            except Exception as e:
+                print(f"Failed to initialize C++ core: {e}. Falling back to Python.")
+                self.use_cpp = False
+        if not self.use_cpp:
+            print("Using Python implementation for NPEN.")
     
     def step2(self, c_initial, phi_initial, electrode_indices, applied_voltages, 
               rtol=1e-3, atol=1e-14, max_iter=50, k_reaction=0.5):
-        """Perform one simulation step using the Python implementation (C++ disabled)."""
+        """Perform one simulation step using C++ if available, otherwise Python."""
+        if self.use_cpp:
+            try:
+                import numpy as _np
+                c_initial = _np.asarray(c_initial, dtype=_np.float64)
+                phi_initial = _np.asarray(phi_initial, dtype=_np.float64)
+                electrode_indices = _np.asarray(electrode_indices, dtype=_np.int32)
+                applied_voltages = _np.asarray(applied_voltages, dtype=_np.float64)
+                c_next, phi_next = self._cpp_sim.step2(
+                    c_initial, phi_initial, electrode_indices, applied_voltages,
+                    rtol, atol, max_iter, k_reaction
+                )
+                return c_next, phi_next
+            except Exception as e:
+                print(f"C++ step2 failed, falling back to Python: {e}")
+                # fall through to Python
         return self._sim.step2(c_initial, phi_initial, electrode_indices, applied_voltages, 
                                k_reaction, rtol, atol, max_iter)
 
