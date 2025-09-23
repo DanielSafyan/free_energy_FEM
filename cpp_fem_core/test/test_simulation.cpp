@@ -41,18 +41,17 @@ int main() {
     
     // Create initial conditions
     Eigen::VectorXd c_prev = Eigen::VectorXd::Constant(4, 1.0);
-    Eigen::VectorXd c3_prev = Eigen::VectorXd::Constant(4, 1.0);
     Eigen::VectorXd phi_prev = Eigen::VectorXd::Constant(4, 0.0);
     
-    Eigen::VectorXd c_next(4), c3_next(4), phi_next(4);
+    Eigen::VectorXd c_next(4), phi_next(4);
     
     // Perform one step
-    simulation.step(c_prev, c3_prev, phi_prev, c_next, c3_next, phi_next);
+    simulation.step(c_prev, phi_prev, c_next, phi_next);
     
     // Print results
     std::cout << "After one step:" << std::endl;
     std::cout << "c: " << c_next.transpose() << std::endl;
-    std::cout << "c3: " << c3_next.transpose() << std::endl;
+    // No c3 in reduced NPEN model
     std::cout << "phi: " << phi_next.transpose() << std::endl;
     
     std::cout << "Test completed successfully!" << std::endl;

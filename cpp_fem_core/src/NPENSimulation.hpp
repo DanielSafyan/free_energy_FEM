@@ -16,17 +16,17 @@ public:
                    double L_c, double c0);
     
     // Perform one time step
-    void step(const Eigen::VectorXd& c_prev, const Eigen::VectorXd& c3_prev, 
+    void step(const Eigen::VectorXd& c_prev,
               const Eigen::VectorXd& phi_prev,
-              Eigen::VectorXd& c_next, Eigen::VectorXd& c3_next, 
+              Eigen::VectorXd& c_next,
               Eigen::VectorXd& phi_next);
     
     // Perform one time step with electrode boundary conditions
-    void step2(const Eigen::VectorXd& c_prev, const Eigen::VectorXd& c3_prev, 
+    void step2(const Eigen::VectorXd& c_prev,
                const Eigen::VectorXd& phi_prev,
                const Eigen::VectorXi& electrode_indices, 
                const Eigen::VectorXd& applied_voltages,
-               Eigen::VectorXd& c_next, Eigen::VectorXd& c3_next, 
+               Eigen::VectorXd& c_next,
                Eigen::VectorXd& phi_next,
                double rtol = 1e-3, double atol = 1e-14, int max_iter = 50, double k_reaction = 0.5);
     
@@ -51,25 +51,16 @@ private:
     
     // Precomputed matrices
     Eigen::SparseMatrix<double> m_M_c;     // Mass matrix for c
-    Eigen::SparseMatrix<double> m_M_c3;    // Mass matrix for c3
     Eigen::SparseMatrix<double> m_M_phi;   // Mass matrix for phi
     Eigen::SparseMatrix<double> m_K_c;     // Stiffness matrix for c
-    Eigen::SparseMatrix<double> m_K_c3;    // Stiffness matrix for c3
     Eigen::SparseMatrix<double> m_K_phi;   // Stiffness matrix for phi
     
     // Precomputed solvers
     Eigen::SparseLU<Eigen::SparseMatrix<double>> m_solver_c;
-    Eigen::SparseLU<Eigen::SparseMatrix<double>> m_solver_c3;
     Eigen::SparseLU<Eigen::SparseMatrix<double>> m_solver_phi;
     
     // Initialize matrices and solvers
     void initializeMatrices();
-    
-    // Assembly methods
-    void assembleResidualAndJacobian(
-        const Eigen::VectorXd& c, const Eigen::VectorXd& c3, const Eigen::VectorXd& phi,
-        const Eigen::VectorXd& c_prev, const Eigen::VectorXd& c3_prev,
-        Eigen::VectorXd& residual_c, Eigen::VectorXd& residual_c3, Eigen::VectorXd& residual_phi);
 
     // Helpers to assemble variable-coefficient matrices for Jacobian construction
     // Weighted stiffness: builds matrix for \int w * (\nabla u \cdot \nabla v) d\Omega

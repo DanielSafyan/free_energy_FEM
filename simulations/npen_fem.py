@@ -3,7 +3,6 @@ Nernst-Planck Electroneutrality (NPE) FEM simulation
 
 This implements a reduced model with variables:
 - c   : salt concentration (c1 = c2 = c by electroneutrality)
-- c3  : neutral species concentration
 - phi : electric potential (determined by current conservation, not Poisson)
 
 Dimensionless formulation follows the conventions used in
@@ -14,14 +13,11 @@ Equations (dimensionless):
 1) Salt transport
    dc/dt = ∇·(D1 ∇c + z1 D1 c ∇phi)   with z1 = 1 typically
 
-2) Neutral diffusion
-   dc3/dt = ∇·(D3 ∇c3)
-
-3) Potential equation from current conservation
+2) Potential equation from current conservation
    ∇·( (D1 - D2) ∇c + (D1 + D2) c ∇phi ) = 0
 
 Boundary conditions:
-- c and c3: no-flux on all boundaries
+- c: no-flux on all boundaries
 - phi: Dirichlet on electrodes (left/right boundaries), natural (no normal current) on walls
 
 API:
@@ -42,17 +38,15 @@ from utils.fem_mesh import TriangularMesh
 def save_history_npen(history, mesh, L_c, tau_c, phi_c, dt, num_steps, constants, file_path="output/electrode_npen_results.npz"):
     """Save NPEN simulation history to NPZ.
 
-    history is a list of (c, c3, phi) snapshots.
+    history is a list of (c, phi) snapshots.
     """
-    c_history = np.array([c for c, c3, phi in history])
-    c3_history = np.array([c3 for c, c3, phi in history])
-    phi_history = phi_c * np.array([phi for c, c3, phi in history])
+    c_history = np.array([c for c, phi in history])
+    phi_history = phi_c * np.array([phi for c, phi in history])
 
     np.savez(file_path,
              nodes=mesh.nodes,
              elements=mesh.elements,
              c_history=c_history,
-             c3_history=c3_history,
              phi_history=phi_history,
              dt=dt,
              num_steps=num_steps,
@@ -70,7 +64,7 @@ def plot_history_npen(file_path="output/electrode_npen_results.npz"):
     nodes = data['nodes']
     elements = data['elements']
     c_history = data['c_history']
-    c3_history = data['c3_history']  # currently unused in plotting; kept for future
+    # no c3 in NPEN reduced model anymore
     phi_history = data['phi_history']
     dt = data['dt'].item()
 
@@ -148,7 +142,7 @@ class NernstPlanckElectroneutralSimulation:
         self.chemical_potential_terms = chemical_potential_terms if chemical_potential_terms is not None else []
 
         self.num_nodes = mesh.num_nodes()
-        self.num_dofs = 3 * self.num_nodes  # [c, c3, phi]
+        self.num_dofs = 2 * self.num_nodes  # [c, phi]
         self._assemble_constant_matrices()
 
         # Boundary nodes (same convention as NPP class)
@@ -202,10 +196,10 @@ class NernstPlanckElectroneutralSimulation:
 
     # --- Core residual and Jacobian ---
     def _assemble_residual_and_jacobian(self,
-                                         c: np.ndarray, c3: np.ndarray, phi: np.ndarray,
-                                         c_prev: np.ndarray, c3_prev: np.ndarray):
+                                         c: np.ndarray, phi: np.ndarray,
+                                         c_prev: np.ndarray):
         """
-        Monolithic assembly for variables [c, c3, phi].
+        Monolithic assembly for variables [c, phi].
         We follow the quasi-Newton approach used in NPP class: terms that depend on c as coefficients
         are reassembled each iteration but their c-dependence is not included in the Jacobian.
         """
@@ -219,9 +213,6 @@ class NernstPlanckElectroneutralSimulation:
         J11 = M / self.dt_dim + self.D1_dim * K + J_cc_drift
         J13 = K_c_phi
 
-        # c3-equation blocks (diffusion only)
-        J22 = M / self.dt_dim + self.D3_dim * K
-
         # phi-equation blocks from current conservation
         # ∫ (D1+D2) c ∇phi · ∇v -> matrix depending on c
         K_phi_phi = self.mesh.assemble_coupling_matrix((self.D1_dim + self.D2_dim) * c)
@@ -232,25 +223,23 @@ class NernstPlanckElectroneutralSimulation:
         # Zero blocks
         Z = lil_matrix((self.num_nodes, self.num_nodes))
 
-        # Assemble Jacobian (order: [c, c3, phi])
+        # Assemble Jacobian (order: [c, phi])
         Jacobian = vstack([
-            hstack([J11,            Z,  J13]),
-            hstack([Z,             J22, Z  ]),
-            hstack([J31,           Z,  J33])
+            hstack([J11, J13]),
+            hstack([J31, J33])
         ]).tocsc()
 
         # Residuals
         R_c = M @ (c - c_prev) / self.dt_dim + self.D1_dim * K @ c + K_c_phi @ phi
-        R_c3 = M @ (c3 - c3_prev) / self.dt_dim + self.D3_dim * K @ c3
         R_phi = K_phi_phi @ phi + (-(self.D1_dim - self.D2_dim)) * (K @ c)
 
-        Residual = np.concatenate([R_c, R_c3, R_phi])
+        Residual = np.concatenate([R_c, R_phi])
         return Residual, Jacobian
 
     # --- Boundary conditions for phi ---
     def _apply_boundary_voltage(self, jacobian, residual, phi):
         jacobian = jacobian.tolil()
-        phi_dof_offset = 2 * self.num_nodes
+        phi_dof_offset = 1 * self.num_nodes
 
         # Left boundary (phi = 0)
         for node_idx in self.left_boundary_nodes:
@@ -270,7 +259,7 @@ class NernstPlanckElectroneutralSimulation:
 
     def _apply_one_node_electrode(self, jacobian, residual, phi, applied_voltage, node_idx):
         jacobian = jacobian.tolil()
-        phi_dof_offset = 2 * self.num_nodes
+        phi_dof_offset = 1 * self.num_nodes
 
         dof_idx = phi_dof_offset + node_idx
         jacobian[dof_idx, :] = 0
@@ -284,18 +273,18 @@ class NernstPlanckElectroneutralSimulation:
         return jacobian, residual
 
     # --- Time integration ---
-    def run(self, c_initial: np.ndarray, c3_initial: np.ndarray, phi_initial: np.ndarray,
+    def run(self, c_initial: np.ndarray, phi_initial: np.ndarray,
             num_steps: int, rtol: float = 1e-3, atol: float = 1e-14, max_iter: int = 50):
-        c, c3, phi = c_initial.copy(), c3_initial.copy(), phi_initial.copy()
-        history = [(c.copy(), c3.copy(), phi.copy())]
+        c, phi = c_initial.copy(), phi_initial.copy()
+        history = [(c.copy(), phi.copy())]
 
         for step in tqdm(range(num_steps), desc="NPE Simulation Progress"):
-            c_prev, c3_prev = c.copy(), c3.copy()
+            c_prev = c.copy()
 
             norms = []
             initial_residual_norm = -1.0
             for it in range(max_iter):
-                residual, jacobian = self._assemble_residual_and_jacobian(c, c3, phi, c_prev, c3_prev)
+                residual, jacobian = self._assemble_residual_and_jacobian(c, phi, c_prev)
                 jacobian, residual = self.apply_vertex_voltage(jacobian, residual, phi)
 
                 nrm = np.linalg.norm(residual)
@@ -307,8 +296,7 @@ class NernstPlanckElectroneutralSimulation:
 
                 delta = spsolve(jacobian, -residual)
                 c   += self.alpha     * delta[0 * self.num_nodes : 1 * self.num_nodes]
-                c3  += self.alpha     * delta[1 * self.num_nodes : 2 * self.num_nodes]
-                phi += self.alpha_phi * delta[2 * self.num_nodes : 3 * self.num_nodes]
+                phi += self.alpha_phi * delta[1 * self.num_nodes : 2 * self.num_nodes]
 
             if it == max_iter - 1:
                 print("Did not converge")
@@ -316,17 +304,17 @@ class NernstPlanckElectroneutralSimulation:
                 raise Exception("Did not converge")
 
             print(f"Amount of change in c (step {step}): {np.linalg.norm(c - c_prev)}")
-            history.append((c.copy(), c3.copy(), phi.copy()))
+            history.append((c.copy(), phi.copy()))
 
         return history
 
-    def step(self, c_initial: np.ndarray, c3_initial: np.ndarray, phi_initial: np.ndarray,
+    def step(self, c_initial: np.ndarray, phi_initial: np.ndarray,
              applied_voltages, step_idx: int, rtol: float = 1e-3, atol: float = 1e-14, max_iter: int = 50):
-        c, c3, phi = c_initial.copy(), c3_initial.copy(), phi_initial.copy()
+        c, phi = c_initial.copy(), phi_initial.copy()
         initial_residual_norm = -1.0
 
         for it in range(max_iter):
-            residual, jacobian = self._assemble_residual_and_jacobian(c, c3, phi, c_initial, c3_initial)
+            residual, jacobian = self._assemble_residual_and_jacobian(c, phi, c_initial)
 
             if applied_voltages is not None:
                 for voltage in applied_voltages:
@@ -346,17 +334,16 @@ class NernstPlanckElectroneutralSimulation:
 
             delta = spsolve(jacobian, -residual)
             c   += self.alpha     * delta[0 * self.num_nodes : 1 * self.num_nodes]
-            c3  += self.alpha     * delta[1 * self.num_nodes : 2 * self.num_nodes]
-            phi += self.alpha_phi * delta[2 * self.num_nodes : 3 * self.num_nodes]
+            phi += self.alpha_phi * delta[1 * self.num_nodes : 2 * self.num_nodes]
 
         if it >= max_iter - 1:
             raise Exception("Did not converge")
 
         print(f"Amount of change in c: {np.linalg.norm(c - c_initial)}")
         print(f"Amount of change in phi: {np.linalg.norm(phi - phi_initial)}")
-        return c, c3, phi
+        return c, phi
 
-    def step2(self, c_initial: np.ndarray, c3_initial: np.ndarray, phi_initial: np.ndarray,
+    def step2(self, c_initial: np.ndarray, phi_initial: np.ndarray,
               electrode_indices: np.ndarray, applied_voltages: np.ndarray,
               rtol: float = 1e-3, atol: float = 1e-14, max_iter: int = 50):
         """
@@ -364,13 +351,13 @@ class NernstPlanckElectroneutralSimulation:
         electrode_indices: indices of electrode nodes
         applied_voltages: voltages at those nodes (Volts)
         """
-        c, c3, phi = c_initial.copy(), c3_initial.copy(), phi_initial.copy()
+        c, phi = c_initial.copy(), phi_initial.copy()
         if len(electrode_indices) != len(applied_voltages):
             raise ValueError("The number of electrode indices must match the number of applied voltages.")
 
         initial_residual_norm = -1.0
         for it in range(max_iter):
-            residual, jacobian = self._assemble_residual_and_jacobian(c, c3, phi, c_initial, c3_initial)
+            residual, jacobian = self._assemble_residual_and_jacobian(c, phi, c_initial)
 
             # Apply Dirichlet BCs at specified nodes
             for elec_idx in electrode_indices:
@@ -388,15 +375,14 @@ class NernstPlanckElectroneutralSimulation:
 
             delta = spsolve(jacobian, -residual)
             c   += self.alpha     * delta[0 * self.num_nodes : 1 * self.num_nodes]
-            c3  += self.alpha     * delta[1 * self.num_nodes : 2 * self.num_nodes]
-            phi += self.alpha_phi * delta[2 * self.num_nodes : 3 * self.num_nodes]
+            phi += self.alpha_phi * delta[1 * self.num_nodes : 2 * self.num_nodes]
 
         if it >= max_iter - 1:
             raise Exception("Did not converge")
 
         print(f"Amount of change in c: {np.linalg.norm(c - c_initial)}")
         print(f"Amount of change in phi: {np.linalg.norm(phi - phi_initial)}")
-        return c, c3, phi
+        return c, phi
 
 
 if __name__ == '__main__':
@@ -429,7 +415,6 @@ if __name__ == '__main__':
 
     # Initial conditions (dimensionless fractions)
     c_init = np.full(mesh.num_nodes(), 0.1)
-    c3_init = np.full(mesh.num_nodes(), 0.9)
 
     # Build initial phi by solving the elliptic equation with the current c
     # K_phi_phi * phi = (D1-D2) * K * c
@@ -450,7 +435,7 @@ if __name__ == '__main__':
         b[node_idx] = sim.voltage_dim
     phi_init = spsolve(A.tocsc(), b)
 
-    hist = sim.run(c_init, c3_init, phi_init, num_steps=num_steps)
+    hist = sim.run(c_init, phi_init, num_steps=num_steps)
     print("NPE simulation finished. Snapshots:", len(hist))
 
     # Save results

@@ -82,7 +82,6 @@ def init_h5_output(mesh, meta, constants):
     N = mesh.num_nodes()
     dsets = {
         "c": _create_ext_dataset(h5f, "states/c", (N,), np.float64),
-        "c3": _create_ext_dataset(h5f, "states/c3", (N,), np.float64),
         "phi": _create_ext_dataset(h5f, "states/phi", (N,), np.float64),
         "ball": _create_ext_dataset(h5f, "game/ball_pos", (2,), np.float64),
         "platform": _create_ext_dataset(h5f, "game/platform_pos", tuple(), np.float64),
@@ -98,9 +97,8 @@ def _append_row(ds, row):
     ds.resize((new_len,) + ds.shape[1:])
     ds[-1] = row
 
-def append_initial_state(dsets, pong_game, c, c3, phi):
+def append_initial_state(dsets, pong_game, c, phi):
     _append_row(dsets["c"], c)
-    _append_row(dsets["c3"], c3)
     _append_row(dsets["phi"], phi)
     _append_row(dsets["ball"], np.array(pong_game.get_ball_position(), dtype=np.float64))
     _append_row(dsets["platform"], float(pong_game.get_platform_position()))
@@ -109,9 +107,8 @@ def append_initial_state(dsets, pong_game, c, c3, phi):
     _append_row(dsets["current"], np.array([np.nan, np.nan, np.nan], dtype=np.float64))
     _append_row(dsets["voltage"], np.full(18, np.nan, dtype=np.float64))
 
-def append_step(dsets, c, c3, phi, ball_pos_xy, platform_pos, score, measured_current, voltage_amount):
+def append_step(dsets, c, phi, ball_pos_xy, platform_pos, score, measured_current, voltage_amount):
     _append_row(dsets["c"], c)
-    _append_row(dsets["c3"], c3)
     _append_row(dsets["phi"], phi)
     _append_row(dsets["ball"], np.array(ball_pos_xy, dtype=np.float64))
     _append_row(dsets["platform"], float(platform_pos))
@@ -141,7 +138,6 @@ class PongH5Reader:
         self.elements = self._f["mesh/elements"]
         # Time-series datasets (lazy h5py.Dataset objects)
         self.c = self._f["states/c"]
-        self.c3 = self._f["states/c3"]
         self.phi = self._f["states/phi"]
         self.ball_pos = self._f["game/ball_pos"]
         self.platform_pos = self._f["game/platform_pos"]
@@ -184,7 +180,6 @@ def load_pong_h5(path: str = os.path.join("output", "pong_simulation.h5"), eager
             },
             "states": {
                 "c": f["states/c"][...],
-                "c3": f["states/c3"][...],
                 "phi": f["states/phi"][...],
             },
             "game": {
@@ -207,7 +202,6 @@ def get_last_state_from_h5(path: str):
 
     Returns a dict with keys:
       - 'c': np.ndarray (N,)
-      - 'c3': np.ndarray (N,)
       - 'phi': np.ndarray (N,)
       - 'ball_pos_xy': tuple(float, float)
       - 'platform_pos': float
@@ -224,7 +218,6 @@ def get_last_state_from_h5(path: str):
 
         # Extract last field states
         c_last = np.array(data.c[t_last])
-        c3_last = np.array(data.c3[t_last])
         phi_last = np.array(data.phi[t_last])
 
         # Extract last game state
@@ -247,7 +240,6 @@ def get_last_state_from_h5(path: str):
 
     return {
         "c": c_last,
-        "c3": c3_last,
         "phi": phi_last,
         "ball_pos_xy": ball_last,
         "platform_pos": platform_last,
@@ -259,7 +251,7 @@ def init_voltage():
     raise NotImplementedError("Use PongSimulation._init_voltage() which uses instance nx, ny, nz.")
 
 
-def calculate_current(c, c3, phi, measuring_indices):
+def calculate_current(c, phi, measuring_indices):
     """
     Compute electric current (A) at each measuring electrode for NPEN (single salt c).
 
@@ -557,7 +549,6 @@ class PongSimulationNPEN:
         N = self.mesh.num_nodes()
         dsets = {
             "c": self._create_ext_dataset(h5f, "states/c", (N,), np.float64),
-            "c3": self._create_ext_dataset(h5f, "states/c3", (N,), np.float64),
             "phi": self._create_ext_dataset(h5f, "states/phi", (N,), np.float64),
             "ball": self._create_ext_dataset(h5f, "game/ball_pos", (2,), np.float64),
             "platform": self._create_ext_dataset(h5f, "game/platform_pos", tuple(), np.float64),
@@ -573,9 +564,8 @@ class PongSimulationNPEN:
         ds.resize((new_len,) + ds.shape[1:])
         ds[-1] = row
 
-    def _append_initial_state(self, dsets, pong_game, c, c3, phi):
+    def _append_initial_state(self, dsets, pong_game, c, phi):
         self._append_row(dsets["c"], c)
-        self._append_row(dsets["c3"], c3)
         self._append_row(dsets["phi"], phi)
         self._append_row(dsets["ball"], np.array(pong_game.get_ball_position(), dtype=np.float64))
         self._append_row(dsets["platform"], float(pong_game.get_platform_position()))
@@ -584,9 +574,8 @@ class PongSimulationNPEN:
         self._append_row(dsets["current"], np.array([np.nan, np.nan, np.nan], dtype=np.float64))
         self._append_row(dsets["voltage"], np.full(18, np.nan, dtype=np.float64))
 
-    def _append_step(self, dsets, c, c3, phi, ball_pos_xy, platform_pos, score, measured_current, voltage_amount):
+    def _append_step(self, dsets, c, phi, ball_pos_xy, platform_pos, score, measured_current, voltage_amount):
         self._append_row(dsets["c"], c)
-        self._append_row(dsets["c3"], c3)
         self._append_row(dsets["phi"], phi)
         self._append_row(dsets["ball"], np.array(ball_pos_xy, dtype=np.float64))
         self._append_row(dsets["platform"], float(platform_pos))
@@ -596,20 +585,17 @@ class PongSimulationNPEN:
 
     def _init_conditions(self):
         if self.experiment == "gaussian":
-            c3 = np.full(self.mesh.num_nodes(), 0.9)
             center_x, center_y, center_z = self.Lx / 2, self.Ly / 2, self.Lz / 2
             sigma = self.Lx / 10
             c = 0.05 + 0.04 * np.exp(-((self.nodes[:, 0] - center_x) ** 2 +
                                        (self.nodes[:, 1] - center_y) ** 2 +
                                        (self.nodes[:, 2] - center_z) ** 2) / (2 * sigma ** 2))
         elif self.experiment == "random":
-            c3 = np.full(self.mesh.num_nodes(), 0.5)
             c = 0.25 + np.random.uniform(-0.1, 0.1, self.mesh.num_nodes())
         else:
-            c3 = np.full(self.mesh.num_nodes(), 0.5)
             c = np.full(self.mesh.num_nodes(), 0.5)
         phi = np.zeros(self.mesh.num_nodes())
-        return c, c3, phi
+        return c, phi
 
     def run(self, electrode_type="anode",activation = "poly_normed",rl=False,
             rl_steps=8,sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5,
@@ -622,10 +608,10 @@ class PongSimulationNPEN:
         clock = pygame.time.Clock()
         pong_game = PongGame(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, False)
 
-        # Initial states (NPEN: c, c3, phi). If a checkpoint is provided, restore from it.
+        # Initial states (NPEN: c, phi). If a checkpoint is provided, restore from it.
         if checkpoint is not None:
             last = get_last_state_from_h5(checkpoint)
-            c, c3, phi = last["c"], last["c3"], last["phi"]
+            c, phi = last["c"], last["phi"]
             # Validate compatibility with current mesh
             if c.shape[0] != self.mesh.num_nodes():
                 raise ValueError(
@@ -648,7 +634,7 @@ class PongSimulationNPEN:
                 except Exception:
                     pass
         else:
-            c, c3, phi = self._init_conditions()
+            c, phi = self._init_conditions()
 
         # HDF5
         meta = {
@@ -657,17 +643,20 @@ class PongSimulationNPEN:
             "dt": self.dt, "num_steps": num_steps,
             "experiment": self.experiment,
         }
+        # Include phi_c (thermal voltage) for visualization tools
+        phi_c_val = getattr(self.sim, 'phi_c', (self.R * self.T / self.F) if self.F != 0 else 1.0)
         constants = {
             "R": self.R, "T": self.T, "F": self.F, "epsilon": self.epsilon,
             "D1": self.D1, "D2": self.D2, "D3": self.D3,
             "z1": self.z1, "z2": self.z2, "chi": self.chi, "c0": self.c0,
+            "phi_c": float(phi_c_val),
             "k_reaction": k_reaction,
             "applied_voltage": self.applied_voltage,
             "measuring_voltage": self.applied_voltage / 10.0,
             "vision_impairment_type": str(vision_impairment_type.value),
         }
         h5f, dsets = self._init_h5_output(meta, constants, output_path)
-        self._append_initial_state(dsets, pong_game, c, c3, phi)
+        self._append_initial_state(dsets, pong_game, c, phi)
 
         measuring_voltage = self.applied_voltage / 10.0
 
@@ -705,11 +694,21 @@ class PongSimulationNPEN:
                         measuring_pattern = [0, measuring_voltage, 0, measuring_voltage, 0, measuring_voltage]
                         voltage_amount = measuring_pattern + voltage_pattern
                         for _ in range(rl_steps):
-                            c_prev, c3_prev = c.copy(), c3.copy()
-                            c, c3, phi = self.sim.step2(
-                                c_prev, c3_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
+                            c_prev = c.copy()
+                            c, phi = self.sim.step2(
+                                c_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
                             )
-                            self._append_step(dsets, c, c3, phi, pong_game.get_ball_position(), plat_pos, pong_game.score, measured_current, voltage_amount)
+                            # During RL perturbation, measured current is undefined; log NaNs
+                            self._append_step(
+                                dsets,
+                                c,
+                                phi,
+                                pong_game.get_ball_position(),
+                                pong_game.get_platform_position(),
+                                pong_game.score,
+                                (np.nan, np.nan, np.nan),
+                                voltage_amount,
+                            )
                     
 
                 # Sense ball position -> voltage pattern
@@ -754,21 +753,21 @@ class PongSimulationNPEN:
 
                 # Simulation steps
                 for _ in range(sim_ticks):
-                    c_prev, c3_prev = c.copy(), c3.copy()
-                    c, c3, phi = self.sim.step2(
-                        c_prev, c3_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
+                    c_prev = c.copy()
+                    c, phi = self.sim.step2(
+                        c_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
                     )
 
                 # Measure current and update platform
                 if electrode_type == "cathode":
-                    measured_current = calculate_current(c, c3, phi, [self.voltage_indices[1], self.voltage_indices[3], self.voltage_indices[5]])
+                    measured_current = calculate_current(c, phi, [self.voltage_indices[1], self.voltage_indices[3], self.voltage_indices[5]])
                 elif electrode_type == "anode":
-                    measured_current = calculate_current(c, c3, phi, [self.voltage_indices[0], self.voltage_indices[2], self.voltage_indices[4]])
+                    measured_current = calculate_current(c, phi, [self.voltage_indices[0], self.voltage_indices[2], self.voltage_indices[4]])
                 plat_pos = calculate_platform_position2(measured_current, self.SCREEN_HEIGHT, activation=activation)
                 pong_game.set_platform_position(int(plat_pos))
 
                 # Log step
-                self._append_step(dsets, c, c3, phi, pong_game.get_ball_position(), plat_pos, pong_game.score, measured_current, voltage_amount)
+                self._append_step(dsets, c, phi, pong_game.get_ball_position(), plat_pos, pong_game.score, measured_current, voltage_amount)
         finally:
             h5f.flush()
             h5f.close()

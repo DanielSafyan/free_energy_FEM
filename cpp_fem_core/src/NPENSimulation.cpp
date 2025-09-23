@@ -95,41 +95,37 @@ void NPENSimulation::initializeMatrices() {
     
     // Initialize sparse matrices
     m_M_c.resize(numNodes, numNodes);
-    m_M_c3.resize(numNodes, numNodes);
     m_M_phi.resize(numNodes, numNodes);
     m_K_c.resize(numNodes, numNodes);
-    m_K_c3.resize(numNodes, numNodes);
     m_K_phi.resize(numNodes, numNodes);
     
     // Assemble mass matrices
     m_mesh->assembleMassMatrix(m_M_c, 1.0);
-    m_mesh->assembleMassMatrix(m_M_c3, 1.0);
     m_mesh->assembleMassMatrix(m_M_phi, 1.0);
     
     // Assemble stiffness matrices
     m_mesh->assembleStiffnessMatrix(m_K_c, 1.0);
-    m_mesh->assembleStiffnessMatrix(m_K_c3, 1.0);
     m_mesh->assembleStiffnessMatrix(m_K_phi, 1.0);  // Use unit coefficient for phi stiffness
     
     // For NPEN, we don't precompute solvers since the system is coupled
     // Solvers will be computed on-demand in the step functions
 }
 
-void NPENSimulation::step(const Eigen::VectorXd& c_prev, const Eigen::VectorXd& c3_prev,
+void NPENSimulation::step(const Eigen::VectorXd& c_prev,
                           const Eigen::VectorXd& phi_prev,
-                          Eigen::VectorXd& c_next, Eigen::VectorXd& c3_next,
+                          Eigen::VectorXd& c_next,
                           Eigen::VectorXd& phi_next) {
     const int N = static_cast<int>(m_mesh->numNodes());
     // Start from previous state
     Eigen::VectorXd c = c_prev;
-    Eigen::VectorXd c3 = c3_prev;
+    // no neutral species in reduced NPEN
     Eigen::VectorXd phi = phi_prev;
 
     // Dimensionless parameters
     const double D_c = std::max({m_D1, m_D2, m_D3});
     const double D1_dim = m_D1 / D_c;
     const double D2_dim = m_D2 / D_c;
-    const double D3_dim = m_D3 / D_c;
+    const double D3_dim = m_D3 / D_c; // kept for completeness but unused
     const double dt_dim = m_dt * D_c / (m_L_c * m_L_c);
 
     const int max_iter = 25;
@@ -147,18 +143,16 @@ void NPENSimulation::step(const Eigen::VectorXd& c_prev, const Eigen::VectorXd& 
 
         Eigen::SparseMatrix<double> J11 = (1.0 / dt_dim) * m_M_c + D1_dim * m_K_c + J_cc_drift;
         Eigen::SparseMatrix<double> J13 = K_c_phi;
-        Eigen::SparseMatrix<double> J22 = (1.0 / dt_dim) * m_M_c + D3_dim * m_K_c;
         Eigen::SparseMatrix<double> J31 = -(D1_dim - D2_dim) * m_K_c;
         Eigen::SparseMatrix<double> J33 = K_phi_phi;
 
         // Residuals
         Eigen::VectorXd R_c   = (1.0 / dt_dim) * (m_M_c * (c  - c_prev)) + D1_dim * (m_K_c * c)  + K_c_phi   * phi;
-        Eigen::VectorXd R_c3  = (1.0 / dt_dim) * (m_M_c * (c3 - c3_prev)) + D3_dim * (m_K_c * c3);
         Eigen::VectorXd R_phi = K_phi_phi * phi + (-(D1_dim - D2_dim)) * (m_K_c * c);
 
-        // Assemble big Jacobian via triplets
+        // Assemble big Jacobian via triplets (order: [c, phi])
         std::vector<Eigen::Triplet<double>> trips;
-        trips.reserve(J11.nonZeros() + J13.nonZeros() + J22.nonZeros() + J31.nonZeros() + J33.nonZeros());
+        trips.reserve(J11.nonZeros() + J13.nonZeros() + J31.nonZeros() + J33.nonZeros());
         auto appendBlock = [&](const Eigen::SparseMatrix<double>& A, int r0, int c0) {
             for (int k = 0; k < A.outerSize(); ++k) {
                 for (Eigen::SparseMatrix<double>::InnerIterator it(A, k); it; ++it) {
@@ -168,18 +162,16 @@ void NPENSimulation::step(const Eigen::VectorXd& c_prev, const Eigen::VectorXd& 
         };
         appendBlock(J11, 0, 0);
         appendBlock(J13, 0, N);
-        appendBlock(J22, N, N);
-        appendBlock(J31, 2 * N, 0);
-        appendBlock(J33, 2 * N, 2 * N);
+        appendBlock(J31, N, 0);
+        appendBlock(J33, N, N);
 
         // Stack residuals
-        Eigen::VectorXd R(3 * N);
+        Eigen::VectorXd R(2 * N);
         R.segment(0, N) = R_c;
-        R.segment(N, N) = R_c3;
-        R.segment(2 * N, N) = R_phi;
+        R.segment(N, N) = R_phi;
 
         // Apply a Dirichlet anchor for phi at node 0: phi(0) = 0 (to fix gauge)
-        const int anchorRow = 2 * N + 0;
+        const int anchorRow = N + 0;
         std::vector<Eigen::Triplet<double>> tripsFiltered;
         tripsFiltered.reserve(trips.size());
         for (const auto& t : trips) {
@@ -188,7 +180,7 @@ void NPENSimulation::step(const Eigen::VectorXd& c_prev, const Eigen::VectorXd& 
         tripsFiltered.emplace_back(anchorRow, anchorRow, 1.0);
         R(anchorRow) = phi(0) - 0.0;
 
-        Eigen::SparseMatrix<double> J(3 * N, 3 * N);
+        Eigen::SparseMatrix<double> J(2 * N, 2 * N);
         J.setFromTriplets(tripsFiltered.begin(), tripsFiltered.end());
         J.makeCompressed();
 
@@ -196,19 +188,14 @@ void NPENSimulation::step(const Eigen::VectorXd& c_prev, const Eigen::VectorXd& 
         Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
         solver.analyzePattern(J);
         solver.factorize(J);
-        if (solver.info() != Eigen::Success) {
-            // Fallback: leave state unchanged
-            c_next = c_prev; c3_next = c3_prev; phi_next = phi_prev;
-            return;
-        }
+        if (solver.info() != Eigen::Success) { c_next = c_prev; phi_next = phi_prev; return; }
         Eigen::VectorXd delta = solver.solve(-R);
 
         // Update (simple under-relaxation for phi if desired)
         const double alpha = 1.0;
         const double alpha_phi = 1.0;
         c   += alpha     * delta.segment(0, N);
-        c3  += alpha     * delta.segment(N, N);
-        phi += alpha_phi * delta.segment(2 * N, N);
+        phi += alpha_phi * delta.segment(N, N);
 
         // Convergence check on residual norm
         double nrm = R.norm();
@@ -217,22 +204,20 @@ void NPENSimulation::step(const Eigen::VectorXd& c_prev, const Eigen::VectorXd& 
     }
 
     c_next = c;
-    c3_next = c3;
     phi_next = phi;
 }
 
-void NPENSimulation::step2(const Eigen::VectorXd& c_prev, const Eigen::VectorXd& c3_prev, 
-                            const Eigen::VectorXd& phi_prev,
-                            const Eigen::VectorXi& electrode_indices, 
-                            const Eigen::VectorXd& applied_voltages,
-                           Eigen::VectorXd& c_next, Eigen::VectorXd& c3_next, 
+void NPENSimulation::step2(const Eigen::VectorXd& c_prev,
+                           const Eigen::VectorXd& phi_prev,
+                           const Eigen::VectorXi& electrode_indices, 
+                           const Eigen::VectorXd& applied_voltages,
+                           Eigen::VectorXd& c_next,
                            Eigen::VectorXd& phi_next,
                            double rtol, double atol, int max_iter, double k_reaction) {
     const int N = static_cast<int>(m_mesh->numNodes());
 
     // Initialize from previous state
     Eigen::VectorXd c = c_prev;
-    Eigen::VectorXd c3 = c3_prev;
     Eigen::VectorXd phi = phi_prev;
 
     // Dimensionless parameters
@@ -256,13 +241,11 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev, const Eigen::VectorXd&
 
         Eigen::SparseMatrix<double> J11 = (1.0 / dt_dim) * m_M_c + D1_dim * m_K_c + J_cc_drift;
         Eigen::SparseMatrix<double> J13 = K_c_phi;
-        Eigen::SparseMatrix<double> J22 = (1.0 / dt_dim) * m_M_c + D3_dim * m_K_c;
         Eigen::SparseMatrix<double> J31 = -(D1_dim - D2_dim) * m_K_c;
         Eigen::SparseMatrix<double> J33 = K_phi_phi;
 
         // Residuals
         Eigen::VectorXd R_c   = (1.0 / dt_dim) * (m_M_c * (c  - c_prev)) + D1_dim * (m_K_c * c)  + K_c_phi   * phi;
-        Eigen::VectorXd R_c3  = (1.0 / dt_dim) * (m_M_c * (c3 - c3_prev)) + D3_dim * (m_K_c * c3);
         Eigen::VectorXd R_phi = K_phi_phi * phi + (-(D1_dim - D2_dim)) * (m_K_c * c);
 
         // Apply reaction on c at electrode nodes and collect phi Dirichlet constraints
@@ -281,7 +264,7 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev, const Eigen::VectorXd&
 
         // Assemble global Jacobian
         std::vector<Eigen::Triplet<double>> trips;
-        trips.reserve(J11.nonZeros() + J13.nonZeros() + J22.nonZeros() + J31.nonZeros() + J33.nonZeros() + static_cast<int>(phi_dirichlet.size()));
+        trips.reserve(J11.nonZeros() + J13.nonZeros() + J31.nonZeros() + J33.nonZeros() + static_cast<int>(phi_dirichlet.size()));
         auto appendBlock = [&](const Eigen::SparseMatrix<double>& A, int r0, int c0) {
             for (int k = 0; k < A.outerSize(); ++k) {
                 for (Eigen::SparseMatrix<double>::InnerIterator it(A, k); it; ++it) {
@@ -291,36 +274,34 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev, const Eigen::VectorXd&
         };
         appendBlock(J11, 0, 0);
         appendBlock(J13, 0, N);
-        appendBlock(J22, N, N);
-        appendBlock(J31, 2 * N, 0);
-        appendBlock(J33, 2 * N, 2 * N);
+        appendBlock(J31, N, 0);
+        appendBlock(J33, N, N);
         // Reaction diagonal on J11
         for (const auto& nd : phi_dirichlet) trips.emplace_back(nd.first, nd.first, k_reac_diag);
 
         // Stack residuals
-        Eigen::VectorXd R(3 * N);
+        Eigen::VectorXd R(2 * N);
         R.segment(0, N) = R_c;
-        R.segment(N, N) = R_c3;
-        R.segment(2 * N, N) = R_phi;
+        R.segment(N, N) = R_phi;
 
         // Strong Dirichlet for phi at electrodes
         std::vector<Eigen::Triplet<double>> tripsFiltered;
         tripsFiltered.reserve(trips.size());
         std::vector<int> enforced_rows; enforced_rows.reserve(phi_dirichlet.size());
-        for (const auto& nd : phi_dirichlet) enforced_rows.push_back(2 * N + nd.first);
+        for (const auto& nd : phi_dirichlet) enforced_rows.push_back(N + nd.first);
         for (const auto& t : trips) {
             bool drop = false;
             for (int r : enforced_rows) { if (t.row() == r) { drop = true; break; } }
             if (!drop) tripsFiltered.push_back(t);
         }
         for (const auto& nd : phi_dirichlet) {
-            int row = 2 * N + nd.first;
+            int row = N + nd.first;
             tripsFiltered.emplace_back(row, row, 1.0);
             R(row) = phi(nd.first) - nd.second;
         }
         // If no electrodes given, anchor gauge at phi(0)
         if (phi_dirichlet.empty() && N > 0) {
-            const int anchorRow = 2 * N + 0;
+            const int anchorRow = N + 0;
             std::vector<Eigen::Triplet<double>> tmp; tmp.reserve(tripsFiltered.size());
             for (const auto& t : tripsFiltered) if (t.row() != anchorRow) tmp.push_back(t);
             tmp.emplace_back(anchorRow, anchorRow, 1.0);
@@ -328,7 +309,7 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev, const Eigen::VectorXd&
             R(anchorRow) = phi(0);
         }
 
-        Eigen::SparseMatrix<double> J(3 * N, 3 * N);
+        Eigen::SparseMatrix<double> J(2 * N, 2 * N);
         J.setFromTriplets(tripsFiltered.begin(), tripsFiltered.end());
         J.makeCompressed();
 
@@ -336,102 +317,20 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev, const Eigen::VectorXd&
         Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
         solver.analyzePattern(J);
         solver.factorize(J);
-        if (solver.info() != Eigen::Success) { c_next = c_prev; c3_next = c3_prev; phi_next = phi_prev; return; }
+        if (solver.info() != Eigen::Success) { c_next = c_prev; phi_next = phi_prev; return; }
         Eigen::VectorXd delta = solver.solve(-R);
 
         // Update
         const double alpha = 1.0, alpha_phi = 1.0;
         c   += alpha     * delta.segment(0, N);
-        c3  += alpha     * delta.segment(N, N);
-        phi += alpha_phi * delta.segment(2 * N, N);
+        phi += alpha_phi * delta.segment(N, N);
 
         // Convergence
         double nrm = R.norm();
         if (it == 0) initial_residual_norm = (nrm > 0 ? nrm : 1.0);
         if (nrm < (initial_residual_norm * rtol) + atol) break;
     }
-
+    // After iterations, write results
     c_next = c;
-    c3_next = c3;
     phi_next = phi;
-}
-
-void NPENSimulation::assembleResidualAndJacobian(
-    const Eigen::VectorXd& c, const Eigen::VectorXd& c3, const Eigen::VectorXd& phi,
-    const Eigen::VectorXd& c_prev, const Eigen::VectorXd& c3_prev,
-    Eigen::VectorXd& residual_c, Eigen::VectorXd& residual_c3, Eigen::VectorXd& residual_phi) {
-    
-    size_t numNodes = m_mesh->numNodes();
-    size_t numElements = m_mesh->numElements();
-    
-    // Initialize residuals
-    residual_c.setZero();
-    residual_c3.setZero();
-    residual_phi.setZero();
-    
-    // Non-dimensional parameters (match Python implementation)
-    double D1_dim = m_D1 / std::max({m_D1, m_D2, m_D3});
-    double D2_dim = m_D2 / std::max({m_D1, m_D2, m_D3});
-    double D3_dim = m_D3 / std::max({m_D1, m_D2, m_D3});
-    double dt_dim = m_dt * std::max({m_D1, m_D2, m_D3}) / (m_L_c * m_L_c);
-    
-    for (size_t i = 0; i < numElements; ++i) {
-        const ElementData& elemData = m_mesh->getElementData(i);
-        double volume = elemData.volume;
-        
-        // Get node indices for this element
-        Eigen::Vector4i elemNodes;
-        elemNodes << m_mesh->getElements()(i, 0), 
-                     m_mesh->getElements()(i, 1), 
-                     m_mesh->getElements()(i, 2), 
-                     m_mesh->getElements()(i, 3);
-        
-        // Get values at nodes
-        Eigen::Vector4d c_local, c3_local, phi_local;
-        Eigen::Vector4d c_prev_local, c3_prev_local;
-        
-        for (int j = 0; j < 4; ++j) {
-            int nodeIdx = elemNodes(j);
-            c_local(j) = c(nodeIdx);
-            c3_local(j) = c3(nodeIdx);
-            phi_local(j) = phi(nodeIdx);
-            c_prev_local(j) = c_prev(nodeIdx);
-            c3_prev_local(j) = c3_prev(nodeIdx);
-        }
-        
-        // Compute gradients
-        const Eigen::Matrix<double, 4, 3>& grads = elemData.grads;
-        Eigen::Vector3d grad_c = grads.transpose() * c_local;
-        Eigen::Vector3d grad_c3 = grads.transpose() * c3_local;
-        Eigen::Vector3d grad_phi = grads.transpose() * phi_local;
-        
-        // Compute average values
-        double c_avg = c_local.mean();
-        
-        // Compute residual contributions for NPEN equations
-        for (int j = 0; j < 4; ++j) {
-            int nodeIdx = elemNodes(j);
-            
-            // c-equation residual: (c - c_prev)/dt + D1 * Δc + D1 * z1 * c * Δphi = 0
-            // Mass term
-            residual_c(nodeIdx) += (c_local(j) - c_prev_local(j)) * volume / dt_dim;
-            // Diffusion term
-            residual_c(nodeIdx) += D1_dim * grad_c.dot(grads.row(j)) * volume;
-            // Drift term
-            residual_c(nodeIdx) += D1_dim * m_z1 * c_local(j) * grad_phi.dot(grads.row(j)) * volume;
-            
-            // c3-equation residual: (c3 - c3_prev)/dt + D3 * Δc3 = 0
-            // Mass term
-            residual_c3(nodeIdx) += (c3_local(j) - c3_prev_local(j)) * volume / dt_dim;
-            // Diffusion term
-            residual_c3(nodeIdx) += D3_dim * grad_c3.dot(grads.row(j)) * volume;
-            
-            // phi-equation residual from current conservation:
-            // ∇·((D1-D2)∇c + (D1+D2)c∇phi) = 0
-            // First term: -(D1-D2) * Δc
-            residual_phi(nodeIdx) += -(D1_dim - D2_dim) * grad_c.dot(grads.row(j)) * volume;
-            // Second term: (D1+D2) * c * Δphi
-            residual_phi(nodeIdx) += (D1_dim + D2_dim) * c_avg * grad_phi.dot(grads.row(j)) * volume;
-        }
-    }
 }

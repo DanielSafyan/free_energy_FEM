@@ -48,16 +48,15 @@ try:
     
     # Create initial conditions
     c_prev = np.ones(4, dtype=np.float64)
-    c3_prev = np.ones(4, dtype=np.float64)
     phi_prev = np.zeros(4, dtype=np.float64)
     
     # Perform one step
-    c_next, c3_next, phi_next = simulation.step(c_prev, c3_prev, phi_prev)
+    c_next, phi_next = simulation.step(c_prev, phi_prev)
     
     # Print results
     print("After one step:")
     print(f"c: {c_next}")
-    print(f"c3: {c3_next}")
+    # No c3 in reduced NPEN model
     print(f"phi: {phi_next}")
     
     print("Python bindings test completed successfully!")

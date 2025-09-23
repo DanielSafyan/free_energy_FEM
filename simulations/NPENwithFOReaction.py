@@ -8,7 +8,7 @@ where k is the reaction rate constant (m/s) and c_surface is the salt
 concentration at the surface node.
 
 It mirrors the structure of simulations/NPPwithFOReaction.py but adapted to the
-NPEN state vector [c, c3, phi].
+NPEN state vector [c, phi].
 """
 import numpy as np
 from scipy.sparse.linalg import spsolve
@@ -46,7 +46,7 @@ class NPENwithFOReaction(NernstPlanckElectroneutralSimulation):
         jacobian[residual_idx, residual_idx] += k_reaction
         return jacobian, residual
 
-    def step(self, c_initial, c3_initial, phi_initial, applied_voltages, step,
+    def step(self, c_initial, phi_initial, applied_voltages, step,
              k_reaction: float = 0.5, rtol: float = 1e-3, atol: float = 1e-14, max_iter: int = 50):
         """
         Extended step including first-order reaction kinetics for c at electrodes.
@@ -55,11 +55,11 @@ class NPENwithFOReaction(NernstPlanckElectroneutralSimulation):
             - node_index
             - time_sequence[step]
         """
-        c, c3, phi = c_initial.copy(), c3_initial.copy(), phi_initial.copy()
+        c, phi = c_initial.copy(), phi_initial.copy()
         initial_residual_norm = -1.0
 
         for i in range(max_iter):
-            residual, jacobian = self._assemble_residual_and_jacobian(c, c3, phi, c_initial, c3_initial)
+            residual, jacobian = self._assemble_residual_and_jacobian(c, phi, c_initial)
 
             if applied_voltages is not None:
                 for voltage_params in applied_voltages:
@@ -89,17 +89,16 @@ class NPENwithFOReaction(NernstPlanckElectroneutralSimulation):
 
             delta = spsolve(jacobian, -residual)
             c   += self.alpha     * delta[0 * self.num_nodes : 1 * self.num_nodes]
-            c3  += self.alpha     * delta[1 * self.num_nodes : 2 * self.num_nodes]
-            phi += self.alpha_phi * delta[2 * self.num_nodes : 3 * self.num_nodes]
+            phi += self.alpha_phi * delta[1 * self.num_nodes : 2 * self.num_nodes]
 
         if i >= max_iter - 1:
             print("Warning: Did not converge within max iterations")
 
         print(f"Amount of change in c: {np.linalg.norm(c - c_initial)}")
         print(f"Amount of change in phi: {np.linalg.norm(phi - phi_initial)}")
-        return c, c3, phi
+        return c, phi
 
-    def step2(self, c_initial, c3_initial, phi_initial,
+    def step2(self, c_initial, phi_initial,
               electrode_indices, applied_voltages,
               k_reaction: float = 0.5, rtol: float = 1e-3, atol: float = 1e-14, max_iter: int = 50):
         """
@@ -108,13 +107,13 @@ class NPENwithFOReaction(NernstPlanckElectroneutralSimulation):
         electrode_indices: array-like of electrode node indices
         applied_voltages: array-like of voltages (Volts) corresponding to indices
         """
-        c, c3, phi = c_initial.copy(), c3_initial.copy(), phi_initial.copy()
+        c, phi = c_initial.copy(), phi_initial.copy()
         if len(electrode_indices) != len(applied_voltages):
             raise ValueError("The number of electrode indices must match the number of applied voltages.")
 
         initial_residual_norm = -1.0
         for i in range(max_iter):
-            residual, jacobian = self._assemble_residual_and_jacobian(c, c3, phi, c_initial, c3_initial)
+            residual, jacobian = self._assemble_residual_and_jacobian(c, phi, c_initial)
 
             for n, elec_idx in enumerate(electrode_indices):
                 if np.isnan(applied_voltages[n]):
@@ -138,12 +137,11 @@ class NPENwithFOReaction(NernstPlanckElectroneutralSimulation):
 
             delta = spsolve(jacobian, -residual)
             c   += self.alpha     * delta[0 * self.num_nodes : 1 * self.num_nodes]
-            c3  += self.alpha     * delta[1 * self.num_nodes : 2 * self.num_nodes]
-            phi += self.alpha_phi * delta[2 * self.num_nodes : 3 * self.num_nodes]
+            phi += self.alpha_phi * delta[1 * self.num_nodes : 2 * self.num_nodes]
 
         if i >= max_iter - 1:
             print("Warning: Did not converge within max iterations")
 
         print(f"Amount of change in c: {np.linalg.norm(c - c_initial)}")
         print(f"Amount of change in phi: {np.linalg.norm(phi - phi_initial)}")
-        return c, c3, phi
+        return c, phi

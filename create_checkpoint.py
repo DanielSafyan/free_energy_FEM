@@ -6,6 +6,7 @@ Creates checkpoint_{timestep}.h5 files with various initialization patterns
 that are compatible with the PongSimulationNPEN.run() function.
 
 Patterns:
+- uniform: c is set to uniform value 'a' everywhere
 - gradient_x: c varies linearly from a to b in x direction
 - gradient_y: c varies linearly from a to b in y direction  
 - gradient_z: c varies linearly from a to b in z direction
@@ -142,6 +143,11 @@ def init_gradient_xyz(nodes: np.ndarray, a: float, b: float,
     return c
 
 
+def init_uniform(nodes: np.ndarray, a: float) -> np.ndarray:
+    """Initialize c field with uniform value 'a' everywhere."""
+    return np.full(len(nodes), a)
+
+
 def init_stripes_x(nodes: np.ndarray, a: float, b: float, c_val: float,
                   nx: int, ny: int, nz: int, Lx: float, Ly: float) -> np.ndarray:
     """
@@ -221,7 +227,9 @@ def create_checkpoint(pattern: str, timestep: int = 0,
     elements = create_3d_mesh_elements(nx, ny, nz)
     
     # Initialize fields based on pattern
-    if pattern == "gradient_x":
+    if pattern == "uniform":
+        c_field = init_uniform(nodes, a)
+    elif pattern == "gradient_x":
         c_field = init_gradient_x(nodes, a, b, Lx)
     elif pattern == "gradient_y":
         c_field = init_gradient_y(nodes, a, b, Ly)
@@ -322,7 +330,7 @@ def main():
     parser = argparse.ArgumentParser(description="Create checkpoint files with various initialization patterns")
     
     parser.add_argument("pattern", choices=[
-        "gradient_x", "gradient_y", "gradient_z",
+        "uniform", "gradient_x", "gradient_y", "gradient_z",
         "gradient_xy", "gradient_xz", "gradient_yz", "gradient_xyz",
         "stripes_x"
     ], help="Initialization pattern")

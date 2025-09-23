@@ -7,6 +7,7 @@ from typing import Tuple
 import numpy as np
 import pygame
 import matplotlib.pyplot as plt
+import h5py
 import shutil
 
 # Reuse the game's rendering/look by importing PongGame
@@ -75,6 +76,89 @@ def _build_midplane_triangulation(nodes: np.ndarray, attrs: dict) -> Tuple[np.nd
     triangles = np.array(tris, dtype=int)
     return xy, triangles, slice_indices
 
+def _build_yz_triangulation(nodes: np.ndarray, attrs: dict) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build a 2D triangulation on the YZ collapsed plane (sum across X/i).
+
+    We pick i = 0 to extract the (y,z) grid because y,z are invariant across i
+    for a structured grid. This returns (yz_coords, triangles, slice_node_indices)
+    where slice_node_indices map local (j,k) -> global node index at i=0.
+    """
+    nx = int(attrs.get("nx"))
+    ny = int(attrs.get("ny"))
+    nz = int(attrs.get("nz"))
+    i = 0
+
+    # Collect all node indices on this i-slice in structured order over (j,k)
+    slice_indices = []
+    for j in range(ny + 1):
+        for k in range(nz + 1):
+            idx = _structured_get_node_idx(i, j, k, ny, nz)
+            slice_indices.append(idx)
+    slice_indices = np.array(slice_indices, dtype=int)
+
+    # Extract YZ coordinates (columns 1 and 2)
+    yz = nodes[slice_indices][:, 1:3]
+
+    # Build triangles on the (ny+1) x (nz+1) grid
+    tris = []
+
+    def local(j, k):
+        return j * (nz + 1) + k
+
+    for j in range(ny):
+        for k in range(nz):
+            v00 = local(j, k)
+            v10 = local(j + 1, k)
+            v01 = local(j, k + 1)
+            v11 = local(j + 1, k + 1)
+            tris.append([v00, v10, v11])
+            tris.append([v00, v11, v01])
+
+    triangles = np.array(tris, dtype=int)
+    return yz, triangles, slice_indices
+
+
+def _build_zx_triangulation(nodes: np.ndarray, attrs: dict) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build a 2D triangulation on the ZX collapsed plane (sum across Y/j).
+
+    We pick j = 0 to extract the (x,z) grid because x,z are invariant across j
+    for a structured grid. This returns (xz_coords, triangles, slice_node_indices)
+    where slice_node_indices map local (i,k) -> global node index at j=0.
+    """
+    nx = int(attrs.get("nx"))
+    ny = int(attrs.get("ny"))
+    nz = int(attrs.get("nz"))
+    j = 0
+
+    # Collect all node indices on this j-slice in structured order over (i,k)
+    slice_indices = []
+    for i in range(nx + 1):
+        for k in range(nz + 1):
+            idx = _structured_get_node_idx(i, j, k, ny, nz)
+            slice_indices.append(idx)
+    slice_indices = np.array(slice_indices, dtype=int)
+
+    # Extract XZ coordinates (columns 0 and 2)
+    xz = nodes[slice_indices][:, [0, 2]]
+
+    # Build triangles on the (nx+1) x (nz+1) grid
+    tris = []
+
+    def local(i, k):
+        return i * (nz + 1) + k
+
+    for i in range(nx):
+        for k in range(nz):
+            v00 = local(i, k)
+            v10 = local(i + 1, k)
+            v01 = local(i, k + 1)
+            v11 = local(i + 1, k + 1)
+            tris.append([v00, v10, v11])
+            tris.append([v00, v11, v01])
+
+    triangles = np.array(tris, dtype=int)
+    return xz, triangles, slice_indices
+
 
 def detect_round_starts(ball_xy: np.ndarray) -> np.ndarray:
     """Return indices t where a new round starts (ball reset to exact initial center).
@@ -98,14 +182,15 @@ def detect_round_starts(ball_xy: np.ndarray) -> np.ndarray:
     return eq0
 
 
-def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bool = False,
+def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bool = False, sum_zy: bool = False, sum_zx: bool = False,
                 start_frac: float = 0.0, until_frac: float = 1.0,
                 video: bool = False, video_output: str = os.path.join("output", "pong_replay.mp4"),
                 frame_dir: str = os.path.join("output", "pong_replay_frames"), dpi: int = 100,
                 use_npen: bool = False,
                 step: int = 1,
                 change: bool = False,
-                time_scale: str | None = None):
+                time_scale: str | None = None,
+                show_current: bool = False):
     """
     Replay the Pong game using positions recorded in an HDF5 file.
 
@@ -118,6 +203,17 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
 
     # Choose appropriate reader (NPP default, NPEN if requested)
     Reader = PongH5ReaderNPEN if use_npen and (PongH5ReaderNPEN is not None) else PongH5ReaderNPP
+    # Backwards-compatibility: proactively remove 'states/c3' if present
+    try:
+        with h5py.File(h5_path, 'r+') as f:
+            if 'states' in f and 'c3' in f['states']:
+                del f['states']['c3']
+                try:
+                    f.flush()
+                except Exception:
+                    pass
+    except Exception:
+        pass
     # Load time series lazily
     with Reader(h5_path) as data:
         ball_ds = data.ball_pos  # shape (T, 2)
@@ -133,6 +229,8 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
         phi_ds = data.phi
         # Prefer stored score dataset if present (backwards compatible)
         score_ds = getattr(data, "score", None)
+        # Current measurements (shape: T x 3), may be missing in older files
+        curr_ds = getattr(data, "measured_current", None)
         nodes = data.nodes[...]
         attrs = data.attrs
         num_frames = min(ball_ds.shape[0], plat_ds.shape[0], c1_ds.shape[0], c2_ds.shape[0], phi_ds.shape[0])
@@ -192,24 +290,63 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
 
         # If video is requested, we also enable field plotting for the video frames.
         if show_fields or video:
-            # Precompute mid-plane triangulation and global color limits
-            xy_mid, tri_mid, slice_idx = _build_midplane_triangulation(nodes, attrs)
-
-            # Precompute column indices across k for z-sum mode
+            # Dimensions
             nx = int(attrs.get("nx"))
             ny = int(attrs.get("ny"))
             nz = int(attrs.get("nz"))
+
+            # Choose triangulation and base slice depending on mode
+            if sum_z and sum_zy:
+                # YZ plane (collapse X)
+                xy_mid, tri_mid, slice_idx = _build_yz_triangulation(nodes, attrs)
+            elif sum_z and sum_zx:
+                # ZX plane (collapse Y)
+                xy_mid, tri_mid, slice_idx = _build_zx_triangulation(nodes, attrs)
+            else:
+                # XY mid-plane
+                xy_mid, tri_mid, slice_idx = _build_midplane_triangulation(nodes, attrs)
+
+            # Precompute index columns for summation
             if sum_z:
-                num_ij = (nx + 1) * (ny + 1)
-                cols = np.zeros((num_ij, nz + 1), dtype=int)
-                # local indexing helper within 2D grid
-                def local(i, j):
-                    return i * (ny + 1) + j
-                for i in range(nx + 1):
+                if sum_zy:
+                    # Sum across X (i) for each (j,k) -> YZ plane
+                    num_jk = (ny + 1) * (nz + 1)
+                    cols = np.zeros((num_jk, nx + 1), dtype=int)
+
+                    def local_yz(j, k):
+                        return j * (nz + 1) + k
+
                     for j in range(ny + 1):
-                        L = local(i, j)
                         for k in range(nz + 1):
-                            cols[L, k] = _structured_get_node_idx(i, j, k, ny, nz)
+                            L = local_yz(j, k)
+                            for i in range(nx + 1):
+                                cols[L, i] = _structured_get_node_idx(i, j, k, ny, nz)
+                elif sum_zx:
+                    # Sum across Y (j) for each (i,k) -> ZX plane
+                    num_ik = (nx + 1) * (nz + 1)
+                    cols = np.zeros((num_ik, ny + 1), dtype=int)
+
+                    def local_zx(i, k):
+                        return i * (nz + 1) + k
+
+                    for i in range(nx + 1):
+                        for k in range(nz + 1):
+                            L = local_zx(i, k)
+                            for j in range(ny + 1):
+                                cols[L, j] = _structured_get_node_idx(i, j, k, ny, nz)
+                else:
+                    # Sum across Z (k) for each (i,j) -> XY plane
+                    num_ij = (nx + 1) * (ny + 1)
+                    cols = np.zeros((num_ij, nz + 1), dtype=int)
+
+                    def local_xy(i, j):
+                        return i * (ny + 1) + j
+
+                    for i in range(nx + 1):
+                        for j in range(ny + 1):
+                            L = local_xy(i, j)
+                            for k in range(nz + 1):
+                                cols[L, k] = _structured_get_node_idx(i, j, k, ny, nz)
             else:
                 cols = None
 
@@ -255,9 +392,15 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 fig = plt.figure(figsize=(16, 12))
                 gs = fig.add_gridspec(2, 2)
                 ax_game = fig.add_subplot(gs[0, 0])
-                ax_c2 = fig.add_subplot(gs[0, 1])
-                ax_c1 = fig.add_subplot(gs[1, 0])
-                ax_phi = fig.add_subplot(gs[1, 1])
+                if is_npen:
+                    # In NPEN, show current plot in place of the redundant c2 panel
+                    ax_cur = fig.add_subplot(gs[0, 1])
+                    ax_c2 = fig.add_subplot(gs[1, 0])  # single concentration 'c'
+                    ax_phi = fig.add_subplot(gs[1, 1])
+                else:
+                    ax_c2 = fig.add_subplot(gs[0, 1])
+                    ax_c1 = fig.add_subplot(gs[1, 0])
+                    ax_phi = fig.add_subplot(gs[1, 1])
             else:
                 plt.ion()
                 if is_npen:
@@ -275,6 +418,16 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                     vals = field_1d[slice_idx]
                     return vals[tri_mid].mean(axis=1)
 
+            # Axis labels depend on selected plane
+            yz_mode = bool(sum_z and sum_zy)
+            zx_mode = bool(sum_z and sum_zx)
+            if yz_mode:
+                axis_x_label, axis_y_label = "y (m)", "z (m)"
+            elif zx_mode:
+                axis_x_label, axis_y_label = "x (m)", "z (m)"
+            else:
+                axis_x_label, axis_y_label = "x (m)", "y (m)"
+
             # Initialize collections at the first selected timestep
             first_idx = int(indices[0])
             c2_faces = tri_face_values(c2_ds[first_idx])
@@ -286,7 +439,15 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                     ax_c2, ax_phi = axes  # use ax_c2 as the single 'c' panel
                 else:
                     ax_c2, ax_c1, ax_phi = axes
-            title_suffix = "∑z " if sum_z else ""
+            if sum_z:
+                if sum_zy:
+                    title_suffix = "∑x "
+                elif sum_zx:
+                    title_suffix = "∑y "
+                else:
+                    title_suffix = "∑z "
+            else:
+                title_suffix = ""
             conc_prefix = "Δ " if change else ""
             # Field names: when NPEN, show single 'c' panel (reuse ax_c2) and label accordingly
             name_c2 = 'c' if is_npen else 'c2'
@@ -298,27 +459,27 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
             t0_disp = ((first_idx * dt * t_scale) if dt > 0 else first_idx)
             ax_c2.set_title(f"{title_suffix}{conc_prefix}{name_c2} @ t = {t0_disp:.2f} {t_unit}")
             ax_c2.set_aspect('equal')
-            ax_c2.set_xlabel("x (m)")
-            ax_c2.set_ylabel("y (m)")
+            ax_c2.set_xlabel(axis_x_label)
+            ax_c2.set_ylabel(axis_y_label)
             fig.colorbar(coll_c2, ax=ax_c2, label=f"Concentration {name_c2}")
 
-            if not (is_npen and not video):
-                # Only create the second concentration panel when not collapsing for NPEN in live view
+            if not is_npen:
+                # Only create the second concentration panel when not NPEN (c1==c2 in NPEN)
                 init_c1_faces = (c1_faces - c1_faces) if change else c1_faces
                 coll_c1 = ax_c1.tripcolor(xy_mid[:, 0], xy_mid[:, 1], tri_mid, facecolors=init_c1_faces, cmap='viridis')
                 ax_c1.triplot(xy_mid[:, 0], xy_mid[:, 1], tri_mid, 'k-', lw=0.1, alpha=0.3)
                 ax_c1.set_title(f"{title_suffix}{conc_prefix}{name_c1} @ t = {t0_disp:.2f} {t_unit}")
                 ax_c1.set_aspect('equal')
-                ax_c1.set_xlabel("x (m)")
-                ax_c1.set_ylabel("y (m)")
+                ax_c1.set_xlabel(axis_x_label)
+                ax_c1.set_ylabel(axis_y_label)
                 fig.colorbar(coll_c1, ax=ax_c1, label=f"Concentration {name_c1}")
 
             coll_phi = ax_phi.tripcolor(xy_mid[:, 0], xy_mid[:, 1], tri_mid, facecolors=phi_faces, cmap='coolwarm')
             ax_phi.triplot(xy_mid[:, 0], xy_mid[:, 1], tri_mid, 'k-', lw=0.1, alpha=0.3)
             ax_phi.set_title(f"{title_suffix}φ @ t = {t0_disp:.2f} {t_unit}")
             ax_phi.set_aspect('equal')
-            ax_phi.set_xlabel("x (m)")
-            ax_phi.set_ylabel("y (m)")
+            ax_phi.set_xlabel(axis_x_label)
+            ax_phi.set_ylabel(axis_y_label)
             fig.colorbar(coll_phi, ax=ax_phi, label="Electric Potential φ (V)")
             if video:
                 # Apply a one-time layout tightening for the static grid
@@ -334,6 +495,66 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 img_game = ax_game.imshow(frame_rgb)
                 ax_game.set_title("Pong Gameplay")
                 ax_game.axis('off')
+
+            # Initialize current polynomial plot for video in NPEN mode (replaces c2 panel)
+            vid_cur_ax = None
+            vid_cur_line = None
+            vid_cur_scatter = None
+            vid_cur_text = None
+            vid_x_poly = None
+            vid_x_nodes = None
+            if video and is_npen:
+                try:
+                    h_third = SCREEN_HEIGHT // 3
+                    vid_x_nodes = np.array([0, h_third, 2 * h_third], dtype=float)
+                    vid_x_poly = np.linspace(0.0, 2.0 * h_third, int(2 * h_third) + 1)
+                    vid_cur_ax = ax_cur
+                    vid_cur_ax.set_title(f"Current-based quadratic @ t = {t0_disp:.2f} {t_unit}")
+                    vid_cur_ax.set_xlabel("y position (pixels)")
+                    vid_cur_ax.set_ylabel("Normalized |current|")
+                    vid_cur_ax.set_xlim(0, 2 * h_third)
+                    vid_cur_ax.set_ylim(0, 1.1)
+                    vid_cur_line, = vid_cur_ax.plot([], [], 'b-', lw=2, label='quadratic fit')
+                    vid_cur_scatter = vid_cur_ax.scatter([], [], c='r', s=40, zorder=5, label='measurements')
+                    vid_cur_text = vid_cur_ax.text(0.02, 0.98, '', transform=vid_cur_ax.transAxes, 
+                                                 verticalalignment='top', fontsize=10, 
+                                                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+                    vid_cur_ax.legend(loc='upper right')
+                except Exception:
+                    pass
+
+        # Optional: separate live window for current polynomial visualization (not recorded in video)
+        # This reproduces the logic of calculate_platform_position2():
+        #   - take absolute currents (I1,I2,I3), normalize by sum
+        #   - fit quadratic through points (0,I1), (H/3,I2), (2H/3,I3)
+        #   - show the polynomial curve and mark the three points
+        cur_fig = None
+        cur_ax = None
+        cur_line = None
+        cur_scatter = None
+        cur_text = None
+        x_poly = None
+        x_nodes = None
+        if show_current and not video:
+            try:
+                plt.ion()
+            except Exception:
+                pass
+            cur_fig, cur_ax = plt.subplots(1, 1, figsize=(7, 4), constrained_layout=True)
+            cur_ax.set_title("Current-based quadratic (normalized |I|)")
+            cur_ax.set_xlabel("y position (pixels)")
+            cur_ax.set_ylabel("Normalized |current|")
+            h_third = SCREEN_HEIGHT // 3
+            x_nodes = np.array([0, h_third, 2 * h_third], dtype=float)
+            x_poly = np.linspace(0.0, 2.0 * h_third, int(2 * h_third) + 1)
+            cur_line, = cur_ax.plot([], [], 'b-', lw=2, label='quadratic fit')
+            cur_scatter = cur_ax.scatter([], [], c='r', s=40, zorder=5, label='measurements')
+            cur_text = cur_ax.text(0.02, 0.98, '', transform=cur_ax.transAxes, 
+                                 verticalalignment='top', fontsize=10, 
+                                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            cur_ax.set_xlim(0, 2 * h_third)
+            cur_ax.set_ylim(0, 1.1)
+            cur_ax.legend(loc='upper right')
 
         running = True
         # local frame counter over selected indices
@@ -421,21 +642,58 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                         c1_faces = (c1_faces_curr - c1_faces_curr) if change else c1_faces_curr
 
                     coll_c2.set_array(c2_faces)
-                    if not (is_npen and not video):
+                    if not is_npen:
                         coll_c1.set_array(c1_faces)
                     coll_phi.set_array(phi_faces)
                     # Per-frame autoscaling like free_energy_visualization (no fixed vmin/vmax)
                     coll_c2.set_clim(vmin=float(np.nanmin(c2_faces)), vmax=float(np.nanmax(c2_faces)))
                     #print(f"all 0 = {np.all(c2_faces == 0)}")
-                    if not (is_npen and not video):
+                    if not is_npen:
                         coll_c1.set_clim(vmin=float(np.nanmin(c1_faces)), vmax=float(np.nanmax(c1_faces)))
                     coll_phi.set_clim(vmin=float(np.nanmin(phi_faces)), vmax=float(np.nanmax(phi_faces)))
                     # Titles with selected time scale
                     t_disp = (g * dt * t_scale) if dt > 0 else g
                     ax_c2.set_title(f"{title_suffix}{conc_prefix}{name_c2} @ t = {t_disp:.2f} {t_unit}")
-                    if not (is_npen and not video):
+                    if not is_npen:
                         ax_c1.set_title(f"{title_suffix}{conc_prefix}{name_c1} @ t = {t_disp:.2f} {t_unit}")
                     ax_phi.set_title(f"{title_suffix}φ @ t = {t_disp:.2f} {t_unit}")
+
+                    # Update current panel in video for NPEN mode
+                    if video and is_npen and (curr_ds is not None) and (vid_cur_ax is not None):
+                        try:
+                            curr_vals = np.array(curr_ds[g], dtype=float)
+                            if curr_vals.shape[0] >= 3 and np.all(np.isfinite(curr_vals)):
+                                abs_curr = np.abs(curr_vals[:3])
+                                denom = float(np.sum(abs_curr))
+                                if denom > 0.0 and np.isfinite(denom) and (vid_x_nodes is not None) and (vid_x_poly is not None):
+                                    norm = abs_curr / denom
+                                    y_nodes = np.array([norm[0], norm[1], norm[2]], dtype=float)
+                                    a, b, c = np.polyfit(vid_x_nodes, y_nodes, 2)
+                                    y_poly = a * vid_x_poly ** 2 + b * vid_x_poly + c
+                                    if vid_cur_line is not None:
+                                        vid_cur_line.set_data(vid_x_poly, y_poly)
+                                    if vid_cur_scatter is not None:
+                                        vid_cur_scatter.set_offsets(np.column_stack([vid_x_nodes, y_nodes]))
+                                    if vid_cur_text is not None:
+                                        vid_cur_text.set_text(f"Σ|I| = {denom:.3e}")
+                                    vid_cur_ax.set_title(f"Current-based quadratic @ t = {t_disp:.2f} {t_unit}")
+                                else:
+                                    if vid_cur_line is not None:
+                                        vid_cur_line.set_data([], [])
+                                    if vid_cur_scatter is not None:
+                                        vid_cur_scatter.set_offsets(np.empty((0, 2)))
+                                    if vid_cur_text is not None:
+                                        vid_cur_text.set_text("")
+                            else:
+                                if vid_cur_line is not None:
+                                    vid_cur_line.set_data([], [])
+                                if vid_cur_scatter is not None:
+                                    vid_cur_scatter.set_offsets(np.empty((0, 2)))
+                                if vid_cur_text is not None:
+                                    vid_cur_text.set_text("")
+                        except Exception:
+                            pass
+
                     if video:
                         import pygame.surfarray as surfarray
                         frame_rgb = np.transpose(surfarray.array3d(screen), (1, 0, 2))
@@ -449,6 +707,57 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 except Exception:
                     pass
 
+            # Update current polynomial window (if enabled)
+            if show_current and not video and (curr_ds is not None):
+                try:
+                    curr_vals = np.array(curr_ds[g], dtype=float)
+                    if curr_vals.shape[0] >= 3 and np.all(np.isfinite(curr_vals)):
+                        abs_curr = np.abs(curr_vals[:3])
+                        denom = float(np.sum(abs_curr))
+                        if denom > 0.0 and np.isfinite(denom):
+                            norm = abs_curr / denom
+                            I1, I2, I3 = norm.tolist()
+                            y_nodes = np.array([I1, I2, I3], dtype=float)
+                            # Quadratic through the three anchor points (0, H/3, 2H/3)
+                            a, b, c = np.polyfit(x_nodes, y_nodes, 2)
+                            y_poly = a * x_poly ** 2 + b * x_poly + c
+                            # Apply updates
+                            if cur_line is not None:
+                                cur_line.set_data(x_poly, y_poly)
+                            if cur_scatter is not None:
+                                cur_scatter.set_offsets(np.column_stack([x_nodes, y_nodes]))
+                            if cur_text is not None:
+                                cur_text.set_text(f"Σ|I| = {denom:.3e}")
+                            if cur_ax is not None:
+                                cur_ax.set_title(f"Current-based quadratic (t={g})")
+                            if cur_fig is not None:
+                                cur_fig.canvas.draw_idle()
+                                plt.pause(0.001)
+                        else:
+                            # Clear when invalid
+                            if cur_line is not None:
+                                cur_line.set_data([], [])
+                            if cur_scatter is not None:
+                                cur_scatter.set_offsets(np.empty((0, 2)))
+                            if cur_text is not None:
+                                cur_text.set_text("")
+                            if cur_fig is not None:
+                                cur_fig.canvas.draw_idle()
+                                plt.pause(0.001)
+                    else:
+                        # Clear when invalid
+                        if cur_line is not None:
+                            cur_line.set_data([], [])
+                        if cur_scatter is not None:
+                            cur_scatter.set_offsets(np.empty((0, 2)))
+                        if cur_text is not None:
+                            cur_text.set_text("")
+                        if cur_fig is not None:
+                            cur_fig.canvas.draw_idle()
+                            plt.pause(0.001)
+                except Exception:
+                    pass
+
             # small delay to make replay viewable (skip extra delay when rendering video)
             if not video:
                 time.sleep(0.01)
@@ -456,6 +765,13 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
         pygame.quit()
 
         if show_fields and not video:
+            try:
+                plt.ioff()
+                plt.show(block=False)
+            except Exception:
+                pass
+
+        if show_current and not video:
             try:
                 plt.ioff()
                 plt.show(block=False)
@@ -489,12 +805,14 @@ def main():
     )
     parser.add_argument("--fps", type=int, default=60, help="Replay frames per second (default: 60)")
     parser.add_argument("--no-fields", action="store_true", help="Disable c1/c2/phi plotting window")
-    parser.add_argument("--sum", action="store_true", help="Display z-sum of fields instead of single mid-plane slice")
+    parser.add_argument("--sum", action="store_true", help="Sum fields along an axis instead of single mid-plane slice (default: ∑ along z to show XY)")
+    parser.add_argument("--zy", action="store_true", help="When used with --sum, sum across X and show the YZ plane (∑x)")
+    parser.add_argument("--zx", action="store_true", help="When used with --sum, sum across Y and show the ZX plane (∑y)")
     parser.add_argument("--change", action="store_true", help="Plot change (Δ) in concentration vs previous selected timestep instead of absolute values")
     parser.add_argument("--from", dest="start_frac", type=float, default=0.0,
-                        help="Fraction [0,1] from start to begin playback (e.g., 0.3 starts at 30%)")
+                        help="Fraction [0,1] from start to begin playback (e.g., 0.3 starts at 30%%)")
     parser.add_argument("--until", dest="until_frac", type=float, default=1.0,
-                        help="Fraction [0,1] from start to end playback window (e.g., 0.8 stops at 80%)")
+                        help="Fraction [0,1] from start to end playback window (e.g., 0.8 stops at 80%%)")
     parser.add_argument("--video", action="store_true", help="Enable video recording of gameplay + fields")
     parser.add_argument("--video-output", default=os.path.join("output", "pong_replay.mp4"),
                         help="Output MP4 file path (default: output/pong_replay.mp4)")
@@ -502,10 +820,12 @@ def main():
     parser.add_argument("--ts", choices=["s", "ms", "mms", "ns"], default=None,
                         help="Time scale for plotting (overrides auto): s seconds, ms milliseconds, mms microseconds, ns nanoseconds")
     parser.add_argument("--step", type=int, default=1,
-                        help=(
-                            "Sampling stride (>=1): only every Nth timestep is plotted. "
-                            "When --change is set, the delta is computed vs the frame that is 'step' raw timesteps earlier."
-                        ))
+                         help=(
+                             "Sampling stride (>=1): only every Nth timestep is plotted. "
+                             "When --change is set, the delta is computed vs the frame that is 'step' raw timesteps earlier."
+                         ))
+    parser.add_argument("--current", action="store_true",
+                        help="Show an extra window plotting the current-based quadratic used for paddle position (marks at x=0,200,400)")
     args = parser.parse_args()
 
     try:
@@ -523,11 +843,16 @@ def main():
         print(f"Dataset length (timesteps): {_T}")
         print(f"Using slice [{s_idx}:{e_idx}] (fraction {args.start_frac:.3f} to {args.until_frac:.3f}), step={args.step}")
 
+        if args.zy and args.zx:
+            raise ValueError("Cannot combine --zy and --zx. Choose one plane when using --sum.")
+
         replay_pong(
             args.h5,
             fps=args.fps,
             show_fields=(not args.no_fields) or args.video,
             sum_z=args.sum,
+            sum_zy=args.zy,
+            sum_zx=args.zx,
             start_frac=args.start_frac,
             until_frac=args.until_frac,
             video=args.video,
@@ -536,6 +861,7 @@ def main():
             step=args.step,
             change=args.change,
             time_scale=args.ts,
+            show_current=args.current,
         )
     except Exception as e:
         print(f"Error during replay: {e}", file=sys.stderr)

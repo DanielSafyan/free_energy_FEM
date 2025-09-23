@@ -4,6 +4,7 @@ from typing import Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
+import h5py
 
 # Support both NPP (default) and NPEN readers
 from pong_simulation.pong_simulation import PongH5Reader as PongH5ReaderNPP
@@ -70,15 +71,40 @@ def tetra_gradients(nodes_xyz: np.ndarray, elements: np.ndarray) -> Tuple[np.nda
 
 def compute_total_free_energy_over_time(h5_path: str, output_png: str = None,
                                          start_frac: float = 0.0, until_frac: float = 1.0,
-                                         use_npen: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+                                         use_npen: bool = False, return_diffusion: bool = False) -> Tuple[np.ndarray, ...]:
     """
     Load HDF5 simulation data and compute total free energy vs time.
 
-    Returns (time_array, total_free_energy).
+    Returns (time_array, total_free_energy) if return_diffusion=False,
+    or (time_array, total_free_energy, diffusion_free_energy) if return_diffusion=True.
     Saves a PNG if output_png is provided.
     """
     if not os.path.exists(h5_path):
         raise FileNotFoundError(f"HDF5 file not found: {h5_path}")
+    # Backwards-compatibility: remove 'states/c3' if present
+    try:
+        with h5py.File(h5_path, 'r+') as f:
+            if 'states' in f and 'c3' in f['states']:
+                del f['states']['c3']
+                try:
+                    f.flush()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Backwards-compatibility: remove 'states/c3' if present
+    try:
+        with h5py.File(h5_path, 'r+') as f:
+            if 'states' in f and 'c3' in f['states']:
+                del f['states']['c3']
+                try:
+                    f.flush()
+                except Exception:
+                    pass
+    except Exception:
+        # If deletion fails (e.g., file locked or readonly), continue gracefully
+        pass
 
     Reader = PongH5ReaderNPEN if use_npen and (PongH5ReaderNPEN is not None) else PongH5ReaderNPP
     with Reader(h5_path) as data:
@@ -139,6 +165,8 @@ def compute_total_free_energy_over_time(h5_path: str, output_png: str = None,
         Ne = elements.shape[0]
 
         total_free_energy = np.zeros(end_idx - start_idx, dtype=float)
+        if return_diffusion:
+            diffusion_free_energy = np.zeros(end_idx - start_idx, dtype=float)
 
         # Precompute element to node indices for fast gather
         elem_nodes = elements.astype(int)
@@ -184,6 +212,12 @@ def compute_total_free_energy_over_time(h5_path: str, output_png: str = None,
             # Integrate over volume
             E_total_t = np.sum(fe_density * volumes)
             total_free_energy[t_out] = E_total_t
+            
+            if return_diffusion:
+                # Diffusion component: entropy + interaction terms
+                diffusion_density = entropy + interaction
+                E_diffusion_t = np.sum(diffusion_density * volumes)
+                diffusion_free_energy[t_out] = E_diffusion_t
 
     # Optional save plot
     if output_png:
@@ -199,7 +233,10 @@ def compute_total_free_energy_over_time(h5_path: str, output_png: str = None,
         plt.savefig(output_png, dpi=300, bbox_inches='tight')
         print(f"Saved: {output_png}")
 
-    return time_array, total_free_energy
+    if return_diffusion:
+        return time_array, total_free_energy, diffusion_free_energy
+    else:
+        return time_array, total_free_energy
 
 
 def compute_cumulative_score_over_time(h5_path: str, start_frac: float = 0.0, until_frac: float = 1.0,
@@ -322,11 +359,32 @@ def main():
                         help='Time scale for plotting/CSV: s=seconds, ms=milliseconds, mms=microseconds, ns=nanoseconds')
     parser.add_argument('--hitrate', nargs='?', const=200, type=int, metavar='H', default=None,
                         help='Replace lower plot with rolling hit count: number of score increases in the last H timesteps (default H=200 if omitted).')
+    parser.add_argument('--diffusion', action='store_true',
+                        help='Plot the diffusion component of free energy (gradient energy) in a different color alongside total free energy')
+    parser.add_argument('--elec', action='store_true',
+                        help='Plot the electric component of free energy (total - diffusion component) instead of total free energy')
+    parser.add_argument('--score-only', action='store_true',
+                        help='Only plot the lower half with the score (cumulative score or hitrate)')
     args = parser.parse_args()
+
+    # Validate mutually exclusive flags
+    if args.diffusion and args.elec:
+        parser.error("--diffusion and --elec flags are mutually exclusive")
 
     try:
         # Determine time scaling and unit label (explicit flag overrides auto)
         Reader = PongH5ReaderNPEN if args.npen and (PongH5ReaderNPEN is not None) else PongH5ReaderNPP
+        # Backwards-compatibility: remove 'states/c3' if present before opening
+        try:
+            with h5py.File(args.h5, 'r+') as f:
+                if 'states' in f and 'c3' in f['states']:
+                    del f['states']['c3']
+                    try:
+                        f.flush()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         with Reader(args.h5) as _r:
             dt = float(_r.attrs.get('dt', 0.0))
         def _time_scale_from_flag(flag: str | None, dt_seconds: float):
@@ -352,14 +410,6 @@ def main():
             return 1e9, 'ns'
         t_scale, t_unit = _time_scale_from_flag(args.ts, dt)
 
-        # Compute free energy over time (no immediate plotting here)
-        time_s, E = compute_total_free_energy_over_time(
-            args.h5,
-            output_png=None,
-            start_frac=args.start_frac,
-            until_frac=args.until_frac,
-            use_npen=args.npen,
-        )
         # Compute cumulative score over time using the same slicing window
         score_t, cum_scores = compute_cumulative_score_over_time(
             args.h5, start_frac=args.start_frac, until_frac=args.until_frac, use_npen=args.npen
@@ -369,18 +419,52 @@ def main():
         print(cum_scores.shape)
         print(np.sum(cum_scores))
 
+        if args.score_only:
+            # Only create a single subplot for the score
+            fig, axS = plt.subplots(1, 1, figsize=(10, 4), constrained_layout=True)
+            score_time_plot = (score_t * t_scale) if (dt > 0 or args.ts) else score_t
+        else:
+            # Compute free energy over time (no immediate plotting here)
+            if args.diffusion or args.elec:
+                time_s, E, E_diffusion = compute_total_free_energy_over_time(
+                    args.h5,
+                    output_png=None,
+                    start_frac=args.start_frac,
+                    until_frac=args.until_frac,
+                    use_npen=args.npen,
+                    return_diffusion=True
+                )
+            else:
+                time_s, E = compute_total_free_energy_over_time(
+                    args.h5,
+                    output_png=None,
+                    start_frac=args.start_frac,
+                    until_frac=args.until_frac,
+                    use_npen=args.npen,
+                )
 
-        # Combined figure: Free energy (top) and score metric (bottom)
-        fig, (axE, axS) = plt.subplots(2, 1, figsize=(10, 8), constrained_layout=True)
-        # Rescale time vectors for plotting
-        time_plot = (time_s * t_scale) if (dt > 0 or args.ts) else time_s
-        score_time_plot = (score_t * t_scale) if (dt > 0 or args.ts) else score_t
-        axE.plot(time_plot, E, 'k-', lw=2, label='Total Free Energy')
-        axE.set_xlabel(f'Time ({t_unit})')
-        axE.set_ylabel('Free Energy (J)')
-        axE.set_title('Total Free Energy vs Time')
-        axE.grid(True, alpha=0.3)
-        axE.legend()
+            # Combined figure: Free energy (top) and score metric (bottom)
+            fig, (axE, axS) = plt.subplots(2, 1, figsize=(10, 8), constrained_layout=True)
+            # Rescale time vectors for plotting
+            time_plot = (time_s * t_scale) if (dt > 0 or args.ts) else time_s
+            score_time_plot = (score_t * t_scale) if (dt > 0 or args.ts) else score_t
+            
+            if args.diffusion:
+                axE.plot(time_plot, E, 'k-', lw=2, label='Total Free Energy')
+                axE.plot(time_plot, E_diffusion, 'r--', lw=1.5, label='Diffusion Component')
+                axE.set_title('Total Free Energy and Diffusion Component vs Time')
+            elif args.elec:
+                E_electric = E - E_diffusion  # Electric component = Total - Diffusion
+                axE.plot(time_plot, E_electric, 'b-', lw=2, label='Electric Component')
+                axE.set_title('Electric Component of Free Energy vs Time')
+            else:
+                axE.plot(time_plot, E, 'k-', lw=2, label='Total Free Energy')
+                axE.set_title('Total Free Energy vs Time')
+                
+            axE.set_xlabel(f'Time ({t_unit})')
+            axE.set_ylabel('Free Energy (J)')
+            axE.grid(True, alpha=0.3)
+            axE.legend()
 
         if args.hitrate is not None:
             H = int(args.hitrate)

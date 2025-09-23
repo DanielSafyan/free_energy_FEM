@@ -46,6 +46,8 @@ include_directories(src)
 add_library(fem_core
     src/TetrahedralMesh.cpp
     src/NPENSimulation.cpp
+    src/FluxCalculator.cpp
+    src/CurrentCalculator.cpp
 )
 
 if(HDF5_FOUND)

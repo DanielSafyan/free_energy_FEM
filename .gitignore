@@ -20,7 +20,7 @@ ipython_config.py
 *.xdmf
 *.pdf
 *.mat
-
+*.zip
 # C++ build files
 build
 CMakeFiles
