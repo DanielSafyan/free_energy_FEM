@@ -127,17 +127,17 @@ if ($Generator -like '*Ninja*') {
 # Compose CMake configure args
 $cmakeArgs = @(
   "-DCMAKE_DISABLE_FIND_PACKAGE_HDF5=$disableHDF5",
-  "-DPython3_EXECUTABLE=\"$pythonPath\""
+  "-DPython3_EXECUTABLE=$pythonPath"
 )
-if ($pybind11Dir) { $cmakeArgs += "-Dpybind11_DIR=\"$pybind11Dir\"" }
-if ($env:EIGEN3_INCLUDE_DIR) { $cmakeArgs += "-DEIGEN3_INCLUDE_DIR=\"$env:EIGEN3_INCLUDE_DIR\"" }
-if ($toolchain) { $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=\"$toolchain\"" }
-if ($CMakeCCompiler) { $cmakeArgs += "-DCMAKE_C_COMPILER=\"$CMakeCCompiler\"" }
-if ($CMakeCxxCompiler) { $cmakeArgs += "-DCMAKE_CXX_COMPILER=\"$CMakeCxxCompiler\"" }
+if ($pybind11Dir) { $cmakeArgs += "-Dpybind11_DIR=$pybind11Dir" }
+if ($env:EIGEN3_INCLUDE_DIR) { $cmakeArgs += "-DEIGEN3_INCLUDE_DIR=$env:EIGEN3_INCLUDE_DIR" }
+if ($toolchain) { $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchain" }
+if ($CMakeCCompiler) { $cmakeArgs += "-DCMAKE_C_COMPILER=$CMakeCCompiler" }
+if ($CMakeCxxCompiler) { $cmakeArgs += "-DCMAKE_CXX_COMPILER=$CMakeCxxCompiler" }
 if ($Generator) {
   $cmakeArgs = @('-G', $Generator) + $cmakeArgs
   if ($Arch) { $cmakeArgs = @('-A', $Arch) + $cmakeArgs }
-  if ($vsInstance) { $cmakeArgs += "-DCMAKE_GENERATOR_INSTANCE=\"$vsInstance\"" }
+  if ($vsInstance) { $cmakeArgs += "-DCMAKE_GENERATOR_INSTANCE=$vsInstance" }
 }
 
 Write-Host "Selected generator: $Generator"
