@@ -152,6 +152,41 @@ $buildArgs = @('--config', $Config, '-j')
 cmake --build . @buildArgs
 if ($LASTEXITCODE -ne 0) { Write-Error "CMake build failed ($LASTEXITCODE)"; exit $LASTEXITCODE }
 
+# Ensure smoke test uses the same Python as CMake (PYTHON3_EXECUTABLE or Python3_EXECUTABLE)
+try {
+  $cmCache = cmake -LA -N . 2>$null
+  $pyExecLine = $cmCache | Select-String -Pattern '^PYTHON3_EXECUTABLE:FILEPATH=(.+)$','^Python3_EXECUTABLE:FILEPATH=(.+)$' -CaseSensitive:$false | Select-Object -First 1
+  if ($pyExecLine) {
+    $match = [regex]::Match($pyExecLine.Line, '=(.+)$')
+    if ($match.Success) {
+      $pyFromCMake = $match.Groups[1].Value.Trim()
+      if (Test-Path $pyFromCMake) {
+        Write-Host "Using Python from CMake: $pyFromCMake"
+        $pythonPath = $pyFromCMake
+      }
+    }
+  } else {
+    # Fallback: derive from PY_SITE cache entry if present
+    $pySiteLine = $cmCache | Select-String -Pattern '^PY_SITE:PATH=(.+)$' | Select-Object -First 1
+    if ($pySiteLine) {
+      $m = [regex]::Match($pySiteLine.Line, '=(.+)$')
+      if ($m.Success) {
+        $pySite = $m.Groups[1].Value.Trim() # .../lib/python3.xx/site-packages
+        $pyLibDir = Split-Path $pySite -Parent            # .../lib/python3.xx
+        $envLibDir = Split-Path $pyLibDir -Parent         # .../lib
+        $envRoot   = Split-Path $envLibDir -Parent        # .../env
+        $pyVer     = Split-Path $pyLibDir -Leaf           # python3.xx
+        $cands = @(
+          (Join-Path $envRoot ("bin/" + $pyVer + ".exe")),
+          (Join-Path $envRoot 'python.exe'),
+          (Join-Path $envRoot 'Scripts/python.exe')
+        )
+        foreach ($cand in $cands) { if (Test-Path $cand) { Write-Host "Derived Python from PY_SITE: $cand"; $pythonPath = $cand; break } }
+      }
+    }
+  }
+} catch { Write-Verbose "Could not parse Python path from CMake cache: $($_.Exception.Message)" }
+
 # Run test executable (handle single- and multi-config generators)
 Write-Host "Running C++ test executable..."
 $testExe = Join-Path (Get-Location) "test_simulation.exe"
