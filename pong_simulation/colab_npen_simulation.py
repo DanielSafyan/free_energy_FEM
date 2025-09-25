@@ -235,25 +235,32 @@ class GPUNPENwithFOReaction(NPENwithFOReaction):
             for p in range(s, e):
                 c = int(J_ind[p])
                 pos_full[(r, c)] = p
-        # Block position arrays
-        pos11 = np.empty(rf.shape[0], dtype=np.int32)
-        pos13 = np.empty(rf.shape[0], dtype=np.int32)
-        pos31 = np.empty(rf.shape[0], dtype=np.int32)
-        pos33 = np.empty(rf.shape[0], dtype=np.int32)
-        for k in range(rf.shape[0]):
-            r0 = int(rf[k])
-            c0 = int(cf[k])
-            pos11[k] = pos_full[(r0, c0)]
-            pos13[k] = pos_full[(r0, c0 + N)]
-            pos31[k] = pos_full[(r0 + N, c0)]
-            pos33[k] = pos_full[(r0 + N, c0 + N)]
+        # Build base-structure (N x N) row/col arrays of length struct_nnz
+        base_rows = np.empty(self._struct_nnz, dtype=np.int32)
+        base_cols = ind.astype(np.int32).copy()
+        for r in range(N):
+            s = indptr[r]
+            e = indptr[r + 1]
+            base_rows[s:e] = r
+        # Block position arrays for struct_nnz entries
+        pos11_struct = np.empty(self._struct_nnz, dtype=np.int32)
+        pos13_struct = np.empty(self._struct_nnz, dtype=np.int32)
+        pos31_struct = np.empty(self._struct_nnz, dtype=np.int32)
+        pos33_struct = np.empty(self._struct_nnz, dtype=np.int32)
+        for p in range(self._struct_nnz):
+            r0 = int(base_rows[p])
+            c0 = int(base_cols[p])
+            pos11_struct[p] = pos_full[(r0, c0)]
+            pos13_struct[p] = pos_full[(r0, c0 + N)]
+            pos31_struct[p] = pos_full[(r0 + N, c0)]
+            pos33_struct[p] = pos_full[(r0 + N, c0 + N)]
         # Cache full structure and mappings on GPU
         self._J_indices_gpu = cp.asarray(J_ind.astype(np.int32))
         self._J_indptr_gpu = cp.asarray(J_indptr.astype(np.int32))
-        self._pos11_gpu = cp.asarray(pos11)
-        self._pos13_gpu = cp.asarray(pos13)
-        self._pos31_gpu = cp.asarray(pos31)
-        self._pos33_gpu = cp.asarray(pos33)
+        self._pos11_struct_gpu = cp.asarray(pos11_struct)
+        self._pos13_struct_gpu = cp.asarray(pos13_struct)
+        self._pos31_struct_gpu = cp.asarray(pos31_struct)
+        self._pos33_struct_gpu = cp.asarray(pos33_struct)
 
     def _apply_bcs_bulk(self, jacobian, residual, phi, c, electrode_indices, applied_voltages, k_reaction):
         """
@@ -385,16 +392,16 @@ class GPUNPENwithFOReaction(NPENwithFOReaction):
                 full_data.fill(0.0)
                 # J11 = (1/dt)*M + D1*K + J_cc_drift
                 if float(self.dt_dim) != 0.0:
-                    cp.add.at(full_data, self._pos11_gpu, (1.0 / float(self.dt_dim)) * self._M_struct_data_gpu)
+                    cp.add.at(full_data, self._pos11_struct_gpu, (1.0 / float(self.dt_dim)) * self._M_struct_data_gpu)
                 if float(self.D1_dim) != 0.0:
-                    cp.add.at(full_data, self._pos11_gpu, float(self.D1_dim) * self._K_struct_data_gpu)
-                cp.add.at(full_data, self._pos11_gpu, J_cc_drift_data)
+                    cp.add.at(full_data, self._pos11_struct_gpu, float(self.D1_dim) * self._K_struct_data_gpu)
+                cp.add.at(full_data, self._pos11_struct_gpu, J_cc_drift_data)
                 # J13 = K_c_phi
-                cp.add.at(full_data, self._pos13_gpu, K_c_phi_data)
+                cp.add.at(full_data, self._pos13_struct_gpu, K_c_phi_data)
                 # J31 = -(D1 - D2) * K
-                cp.add.at(full_data, self._pos31_gpu, (-(float(self.D1_dim) - float(self.D2_dim))) * self._K_struct_data_gpu)
+                cp.add.at(full_data, self._pos31_struct_gpu, (-(float(self.D1_dim) - float(self.D2_dim))) * self._K_struct_data_gpu)
                 # J33 = K_phi_phi
-                cp.add.at(full_data, self._pos33_gpu, K_phi_phi_data)
+                cp.add.at(full_data, self._pos33_struct_gpu, K_phi_phi_data)
                 Jacobian_gpu = cpx_csr_matrix((full_data, self._J_indices_gpu, self._J_indptr_gpu), shape=(2 * self._N, 2 * self._N))
                 # Residual on GPU: reuse struct CSR for M/K; create temp CSR for variable blocks
                 R_c_gpu = (self._M_struct_csr_gpu @ (c_gpu - cprev_gpu)) / float(self.dt_dim) + float(self.D1_dim) * (self._K_struct_csr_gpu @ c_gpu)
