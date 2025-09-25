@@ -221,6 +221,12 @@ class PongGame:
     
     def _initialize_csv_file(self):
         """Initialize the CSV file with headers if it doesn't exist."""
+        # Ensure the parent directory exists (important for headless/Colab runs
+        # where the current working directory may not contain the gameplay/ folder).
+        csv_dir = os.path.dirname(self.csv_file_path)
+        if csv_dir:
+            os.makedirs(csv_dir, exist_ok=True)
+
         if not os.path.exists(self.csv_file_path):
             with open(self.csv_file_path, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile)
