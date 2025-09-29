@@ -738,6 +738,10 @@ class PongSimulationNPEN:
                         elif ball_pos == ball_pos_prev:
                             ball_pos = ball_pos_rnd
                         
+                elif vision_impairment_type == VisionImpairmentType.CONTINUOUS:
+                    # No discrete block manipulation; continuous pattern is applied below
+                    pass
+                 
                 else: 
                     raise ValueError(f"Unknown vision impairment type: {vision_impairment_type}")
                 
