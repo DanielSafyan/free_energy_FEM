@@ -28,6 +28,7 @@ class VisionImpairmentType(Enum):
     DELAYED = "DELAYED"
     RANDOM_FULL = "RANDOM_FULL"
     RANDOM_FIRSTROW = "RANDOM_FIRSTROW"
+    CONTINUOUS = "CONTINUOUS"
  
 # -----------------------------
 # HDF5 logging utilities
@@ -743,11 +744,13 @@ class PongSimulationNPEN:
 
 
                 
-
-
                 voltage_pattern = [np.nan] * 12
-                voltage_pattern[2 * ball_pos] = self.applied_voltage
-                voltage_pattern[2 * ball_pos + 1] = 0
+                if vision_impairment_type == VisionImpairmentType.CONTINUOUS:
+                    voltage_pattern = self.continuous_voltage_pattern(pong_game.get_ball_position())
+                else:
+                    voltage_pattern[2 * ball_pos] = self.applied_voltage
+                    voltage_pattern[2 * ball_pos + 1] = 0
+                
                 measuring_pattern = [measuring_voltage, 0, measuring_voltage, 0, measuring_voltage, 0]
                 voltage_amount = measuring_pattern + voltage_pattern
 
@@ -782,6 +785,29 @@ class PongSimulationNPEN:
                 print(f"Saved history to: {self._h5_path}")
             except Exception:
                 pass
+    
+
+    def continuous_voltage_pattern(self, ball_pos):
+        ball_x, ball_y = ball_pos
+        ball_x_frac = ball_x / self.SCREEN_WIDTH
+        ball_y_upper = ball_y / (self.SCREEN_HEIGHT/2)
+        ball_y_upper = ball_y_upper if ball_y_upper < 1 else 1 
+        ball_y_lower = (ball_y-self.SCREEN_HEIGHT/2)/2
+        ball_y_lower = ball_y_lower if ball_y_lower > 0 else 1
+        volt_00 = (1-ball_x_frac) * (1-ball_y_upper) * self.applied_voltage
+        volt_01 = (1-ball_x_frac) * (ball_y_upper*(1-ball_y_lower)) * self.applied_voltage
+        volt_02 = (1-ball_x_frac) * ball_y_lower * self.applied_voltage
+        volt_10 = ball_x_frac * (1-ball_y_upper) * self.applied_voltage
+        volt_11 = ball_x_frac * (ball_y_upper*(1-ball_y_lower)) * self.applied_voltage
+        volt_12 = ball_x_frac * ball_y_lower * self.applied_voltage
+        pre_voltage_pattern = [volt_02,volt_01,volt_00,volt_12,volt_11,volt_10]
+        voltage_pattern = [np.nan]*12
+        for i, volt in enumerate(pre_voltage_pattern):
+            voltage_pattern[i*2] = volt if volt != 0 else np.nan
+            voltage_pattern[i*2+1] = 0 if volt != 0 else np.nan
+        return voltage_pattern
+
+        
 
 
 def calculate_platform_position(measured_current, screen_height):
@@ -831,7 +857,7 @@ def calculate_platform_position2(measured_current, screen_height, activation="po
         return calculate_platform_position(measured_current, screen_height)
     else:
         raise ValueError("Invalid activation: " + activation)
-    
+
 
 if __name__ == "__main__":
     sim_runner = PongSimulationNPEN(dt=0.1)
