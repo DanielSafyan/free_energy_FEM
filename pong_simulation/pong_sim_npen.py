@@ -394,7 +394,7 @@ class PongSimulationNPEN:
                  screen_width=600, screen_height=600,
                  R=8.314, T=298.0, F=96485.33,
                  epsilon=80 * 8.854e-12,
-                 D1=1e-9, D2=1e-9, D3=1e-9,
+                 D1=1.33e-9, D2=2.03e-9, D3=1e-9,
                  z1=1, z2=-1,
                  chi=0.0,
                  applied_voltage=20,
@@ -793,7 +793,8 @@ class PongSimulationNPEN:
 
     def continuous_voltage_pattern(self, ball_pos):
         ball_x, ball_y = ball_pos
-        ball_x_frac = ball_x / self.SCREEN_WIDTH
+        ball_x_frac = (ball_x - 100) / (self.SCREEN_WIDTH - 100)
+        ball_x_frac = min(max(ball_x_frac, 0), 1)
         ball_y_upper = ball_y / (self.SCREEN_HEIGHT/2)
         ball_y_upper = ball_y_upper if ball_y_upper < 1 else 1 
         ball_y_lower = (ball_y-self.SCREEN_HEIGHT/2)/2
