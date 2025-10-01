@@ -132,9 +132,8 @@ def run() -> None:
                 counter += 1
 
     print("\nSummary:")
-    for p in created:
-        print(f" - {p}")
 
+    print(created)
 
 if __name__ == "__main__":
     run()
