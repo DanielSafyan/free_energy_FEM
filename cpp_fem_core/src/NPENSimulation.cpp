@@ -250,8 +250,8 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev,
         Eigen::SparseMatrix<double> J33 = K_phi_phi;
 
         // Residuals
-        Eigen::VectorXd R_c   = (1.0 / dt_dim) * (m_M_c * (c  - c_prev)) + D1_dim * (m_K_c * c)  + K_c_phi   * phi;
-        Eigen::VectorXd R_phi = K_phi_phi * phi + (-(D1_dim - D2_dim)) * (m_K_c * c);
+        Eigen::VectorXd R_c   = (1.0 / dt_dim) * (m_M_c * (c  - c_prev)) + D1_diff_dim * (m_K_c * c)  + K_c_phi   * phi;
+        Eigen::VectorXd R_phi = K_phi_phi * phi + (-(D1_diff_dim - D2_diff_dim)) * (m_K_c * c);
 
         // Apply reaction on c at electrode nodes and collect phi Dirichlet constraints
         std::vector<std::pair<int,double>> phi_dirichlet; // (node, voltage_dim)
