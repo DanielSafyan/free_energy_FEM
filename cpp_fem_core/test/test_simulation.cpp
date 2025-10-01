@@ -37,7 +37,11 @@ int main() {
     double L_c = 1e-3, c0 = 1.0;
     
     auto meshPtr = std::make_shared<TetrahedralMesh>(mesh);
-    NPENSimulation simulation(meshPtr, dt, D1, D2, D3, z1, z2, epsilon, R, T, L_c, c0);
+    // New constructor expects split coefficients: (D_diff1, D_mig1, D_diff2, D_mig2)
+    // Use D1 for both diffusion and migration of species 1, and D2 for species 2 in this smoke test
+    NPENSimulation simulation(meshPtr, dt, /*D_diff1*/ D1, /*D_mig1*/ D1,
+                              /*D_diff2*/ D2, /*D_mig2*/ D2,
+                              D3, z1, z2, epsilon, R, T, L_c, c0);
     
     // Create initial conditions
     Eigen::VectorXd c_prev = Eigen::VectorXd::Constant(4, 1.0);

@@ -236,7 +236,13 @@ try:
     nodes = np.array([[0,0,0],[1,0,0],[0,1,0],[0,0,1]], dtype=np.float64)
     elements = np.array([[0,1,2,3]], dtype=np.int32)
     mesh = fem_cpp.TetrahedralMesh(nodes, elements)
-    sim = fem_cpp.NPENSimulation(mesh, 0.01, 1e-9, 1e-9, 1e-9, 1, -1, 8.854e-12, 8.314, 298, 1e-3, 1.0)
+    # Constructor expects (mesh, dt, D_diff1, D_mig1, D_diff2, D_mig2, D3, z1, z2, epsilon, R, T, L_c, c0)
+    sim = fem_cpp.NPENSimulation(mesh, 0.01,
+                                 1e-9, 1e-9,
+                                 1e-9, 1e-9,
+                                 1e-9,
+                                 1, -1,
+                                 8.854e-12, 8.314, 298, 1e-3, 1.0)
     print('Constructed mesh and simulation successfully')
 except Exception as e:
     print('Python smoke test FAILED:', e)
