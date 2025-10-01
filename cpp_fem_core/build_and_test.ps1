@@ -161,7 +161,7 @@ $buildOutput | Tee-Object -FilePath $BUILD_LOG
 if ($buildStatus -ne 0) {
   Write-Host "`nERROR: CMake build failed with status $buildStatus"
   if (Test-Path $BUILD_LOG) {
-    Write-Host "Showing last 200 lines of $BUILD_LOG:"
+    Write-Host "Showing last 200 lines of ${BUILD_LOG}:"
     Get-Content $BUILD_LOG -Tail 200 | ForEach-Object { Write-Host $_ }
   }
   exit $buildStatus
