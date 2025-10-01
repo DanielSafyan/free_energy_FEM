@@ -61,24 +61,22 @@ PATTERN_SPECS: List[PatternSpec] = [
     PatternSpec(
         pattern="uniform",
         params=[
-            {"a": 0.5, "b": 0.0, "c": 0.0},
-            {"a": 1.0, "b": 0.0, "c": 0.0},
+            {"a": 0.4, "b": 0.0, "c": 0.0},
         ],
         reverse=False,  # no reverse for uniform
     ),
     PatternSpec(
         pattern="gradient_x",
         params=[
-            {"a": 0.5, "b": 1.0, "c": 0.0},
-            {"a": 0.2, "b": 0.8, "c": 0.0},
+            {"a": 0.3, "b": 0.5, "c": 0.0},
+            {"a": 0.2, "b": 0.9, "c": 0.0},
         ],
         reverse=True,
     ),
     PatternSpec(
         pattern="gradient_xz",
         params=[
-            {"a": 0.3, "b": 0.9, "c": 0.0},
-            {"a": 0.1, "b": 0.6, "c": 0.0},
+            {"a": 0.3, "b": 0.5, "c": 0.0},
         ],
         reverse=True,
     ),
