@@ -703,7 +703,7 @@ class PongSimulationNPEN:
                         # give chaotic signals to increase plasticity for a short time
                         # invert voltage pattern
                         voltage_pattern = [0] * 12
-                        for i in range(6): voltage_pattern[2*i+1] = self.applied_voltage
+                        for i in range(6): voltage_pattern[2*i] = -self.applied_voltage
                         
                         measuring_pattern = [0, measuring_voltage, 0, measuring_voltage, 0, measuring_voltage]
                         voltage_amount = measuring_pattern + voltage_pattern
