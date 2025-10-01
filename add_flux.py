@@ -70,7 +70,7 @@ def compute_flux_history_cpp(flux_calculator, c_history, phi_history):
     return flux_tensor
 
 
-def add_flux_to_h5(input_file, output_file=None, overwrite=False):
+def add_flux_to_h5(input_file, output_file=None, overwrite=False, split=False):
     """
     Add flux calculation to an HDF5 file.
     
@@ -78,6 +78,7 @@ def add_flux_to_h5(input_file, output_file=None, overwrite=False):
         input_file: path to input HDF5 file
         output_file: path to output HDF5 file (default: modify input file)
         overwrite: whether to overwrite existing flux dataset
+        split: whether to store split components (diffusion and drift)
     """
     if output_file is None:
         output_file = input_file
@@ -146,26 +147,47 @@ def add_flux_to_h5(input_file, output_file=None, overwrite=False):
         print(f"  Nodes: {num_nodes}")
         print(f"  Spatial dimensions: {spatial_dim}")
         
-        # Prepare flux tensor: (num_timesteps, num_nodes, spatial_dim)
+        # Prepare flux tensor shapes
         flux_shape = (num_timesteps, num_nodes, spatial_dim)
         print(f"Flux tensor shape: {flux_shape}")
         
-        # Load all data for batch processing (more efficient)
-        print("Loading time series data for batch processing...")
+        # Load all data for processing
+        print("Loading time series data for processing...")
         c_history = c_dataset[:]
         phi_history = phi_dataset[:]
         
         print(f"Loaded c_history: {c_history.shape}, phi_history: {phi_history.shape}")
         
-        # Calculate flux using C++ batch processing (much faster)
-        print("Computing flux vectors using C++ implementation...")
-        flux_tensor_list = compute_flux_history_cpp(flux_calculator, c_history, phi_history)
-        
-        # Convert list of matrices to numpy array for HDF5 storage
-        print("Converting flux tensor for HDF5 storage...")
-        flux_tensor = np.zeros(flux_shape)
-        for t, flux_t in enumerate(flux_tensor_list):
-            flux_tensor[t, :, :] = flux_t
+        # Compute flux tensors
+        if split:
+            print("Computing split flux components (diffusion and drift) using C++ gradients...")
+            flux_tensor = np.zeros(flux_shape)
+            flux_diff_tensor = np.zeros(flux_shape)
+            flux_drift_tensor = np.zeros(flux_shape)
+            D1_used = flux_calculator.getD1()
+            z1_used = flux_calculator.getZ1()
+            for t in tqdm(range(num_timesteps), desc="Timesteps"):
+                c_t = c_history[t, :]
+                phi_t = phi_history[t, :]
+                # Compute gradients at nodes via C++ FEM
+                grad_c = flux_calculator.computeGradient(c_t)
+                grad_phi = flux_calculator.computeGradient(phi_t)
+                # Components
+                j_diff = -D1_used * grad_c
+                j_drift = -z1_used * D1_used * (c_t[:, None] * grad_phi)
+                # Store
+                flux_diff_tensor[t, :, :] = j_diff
+                flux_drift_tensor[t, :, :] = j_drift
+                flux_tensor[t, :, :] = j_diff + j_drift
+        else:
+            # Calculate total flux using C++ batch processing (fast path)
+            print("Computing total flux vectors using C++ implementation...")
+            flux_tensor_list = compute_flux_history_cpp(flux_calculator, c_history, phi_history)
+            # Convert list of matrices to numpy array for HDF5 storage
+            print("Converting flux tensor for HDF5 storage...")
+            flux_tensor = np.zeros(flux_shape)
+            for t, flux_t in enumerate(flux_tensor_list):
+                flux_tensor[t, :, :] = flux_t
     
     # Write results to output file
     print(f"Writing results to: {output_file}")
@@ -175,28 +197,32 @@ def add_flux_to_h5(input_file, output_file=None, overwrite=False):
         import shutil
         shutil.copy2(input_file, output_file)
     
-    # Add flux dataset to HDF5 file
+    # Add flux datasets to HDF5 file
     with h5py.File(output_file, 'a') as f:
         flux_dataset_name = 'states/flux'
+        flux_diff_dataset_name = 'states/flux_diffusion'
+        flux_drift_dataset_name = 'states/flux_drift'
         
-        # Check if flux dataset already exists
-        if flux_dataset_name in f:
-            if overwrite:
-                print(f"Overwriting existing flux dataset...")
-                del f[flux_dataset_name]
-            else:
-                print(f"Error: Flux dataset already exists. Use --overwrite to replace it.")
-                return
+        # Overwrite checks
+        existing = [name for name in [flux_dataset_name, flux_diff_dataset_name, flux_drift_dataset_name] if name in f]
+        if existing and not overwrite:
+            print(f"Error: Dataset(s) already exist: {existing}. Use --overwrite to replace them.")
+            return
+        # Delete existing if overwrite requested
+        if overwrite:
+            for name in existing:
+                print(f"Overwriting existing dataset: {name}")
+                del f[name]
         
-        # Create flux dataset
+        # Create total flux dataset
         flux_dataset = f.create_dataset(
-            flux_dataset_name, 
+            flux_dataset_name,
             data=flux_tensor,
             compression='gzip',
             compression_opts=9
         )
         
-        # Add metadata attributes
+        # Add metadata attributes (total)
         flux_dataset.attrs['description'] = 'Flux vectors J = -D1 ∇c - z1 D1 c ∇phi'
         flux_dataset.attrs['units'] = 'dimensionless flux density'
         flux_dataset.attrs['D1_used'] = D1_dim
@@ -207,7 +233,42 @@ def add_flux_to_h5(input_file, output_file=None, overwrite=False):
         flux_dataset.attrs['mesh_nodes'] = cpp_mesh.numNodes()
         flux_dataset.attrs['mesh_elements'] = cpp_mesh.numElements()
         
+        # Optionally create split component datasets
+        if split:
+            flux_diff_ds = f.create_dataset(
+                flux_diff_dataset_name,
+                data=flux_diff_tensor,
+                compression='gzip',
+                compression_opts=9
+            )
+            flux_diff_ds.attrs['description'] = 'Diffusion component of flux: J_diff = -D1 ∇c'
+            flux_diff_ds.attrs['units'] = 'dimensionless flux density'
+            flux_diff_ds.attrs['D1_used'] = D1_dim
+            flux_diff_ds.attrs['spatial_dim'] = spatial_dim
+            flux_diff_ds.attrs['computation_method'] = 'C++ FluxCalculator gradients'
+            flux_diff_ds.attrs['implementation'] = 'fem_core_py C++ bindings'
+            flux_diff_ds.attrs['mesh_nodes'] = cpp_mesh.numNodes()
+            flux_diff_ds.attrs['mesh_elements'] = cpp_mesh.numElements()
+            
+            flux_drift_ds = f.create_dataset(
+                flux_drift_dataset_name,
+                data=flux_drift_tensor,
+                compression='gzip',
+                compression_opts=9
+            )
+            flux_drift_ds.attrs['description'] = 'Drift component of flux: J_drift = -z1 D1 c ∇phi'
+            flux_drift_ds.attrs['units'] = 'dimensionless flux density'
+            flux_drift_ds.attrs['D1_used'] = D1_dim
+            flux_drift_ds.attrs['z1_used'] = z1
+            flux_drift_ds.attrs['spatial_dim'] = spatial_dim
+            flux_drift_ds.attrs['computation_method'] = 'C++ FluxCalculator gradients'
+            flux_drift_ds.attrs['implementation'] = 'fem_core_py C++ bindings'
+            flux_drift_ds.attrs['mesh_nodes'] = cpp_mesh.numNodes()
+            flux_drift_ds.attrs['mesh_elements'] = cpp_mesh.numElements()
+        
         print(f"Successfully added flux dataset with shape {flux_tensor.shape}")
+        if split:
+            print(f"Also added split component datasets: diffusion and drift")
         print(f"Flux magnitude range: [{np.min(np.linalg.norm(flux_tensor, axis=-1)):.6f}, {np.max(np.linalg.norm(flux_tensor, axis=-1)):.6f}]")
 
 
@@ -220,7 +281,8 @@ Examples:
   python add_flux.py output/pong_simulation.h5
   python add_flux.py input.h5 -o output_with_flux.h5
   python add_flux.py input.h5 --overwrite
-        """
+  python add_flux.py input.h5 --split
+"""
     )
     
     parser.add_argument(
@@ -237,7 +299,13 @@ Examples:
     parser.add_argument(
         '--overwrite',
         action='store_true',
-        help='Overwrite existing flux dataset if it exists'
+        help='Overwrite existing flux datasets if they exist'
+    )
+    
+    parser.add_argument(
+        '--split',
+        action='store_true',
+        help='Also store split components: diffusion (−D1∇c) and drift (−z1 D1 c ∇phi)'
     )
     
     args = parser.parse_args()
@@ -255,7 +323,7 @@ Examples:
             sys.exit(1)
     
     try:
-        add_flux_to_h5(args.input_file, args.output, args.overwrite)
+        add_flux_to_h5(args.input_file, args.output, args.overwrite, args.split)
         print("Flux calculation completed successfully!")
         
     except Exception as e:

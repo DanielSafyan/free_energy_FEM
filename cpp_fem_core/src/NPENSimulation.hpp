@@ -10,7 +10,7 @@ class NPENSimulation {
 public:
     // Constructor
     NPENSimulation(std::shared_ptr<TetrahedralMesh> mesh, double dt, 
-                   double D1, double D2, double D3, 
+                   double D_diff1, double D_mig1, double D_diff2, double D_mig2, double D3, 
                    int z1, int z2, 
                    double epsilon, double R, double T, 
                    double L_c, double c0);
@@ -40,7 +40,8 @@ private:
     
     // Physical constants
     double m_dt;        // Time step
-    double m_D1, m_D2, m_D3;  // Diffusion coefficients
+    // Transport coefficients (split into diffusion and migration parts)
+    double m_D1_diff, m_D1_mig, m_D2_diff, m_D2_mig, m_D3;  
     int m_z1, m_z2;     // Ion charges
     double m_epsilon;   // Permittivity
     double m_R, m_T;    // Gas constant, temperature

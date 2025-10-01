@@ -11,10 +11,10 @@ so the external interface is intentionally similar.
 
 Equations (dimensionless):
 1) Salt transport
-   dc/dt = ∇·(D1 ∇c + z1 D1 c ∇phi)   with z1 = 1 typically
+   dc/dt = ∇·(D_diff1 ∇c + z1 D_mig1 c ∇phi)   with z1 = 1 typically
 
 2) Potential equation from current conservation
-   ∇·( (D1 - D2) ∇c + (D1 + D2) c ∇phi ) = 0
+   ∇·( (D_diff1 - D_diff2) ∇c + (D_mig1 + D_mig2) c ∇phi ) = 0
 
 Boundary conditions:
 - c: no-flux on all boundaries
@@ -98,7 +98,7 @@ def plot_history_npen(file_path="output/electrode_npen_results.npz"):
 
 class NernstPlanckElectroneutralSimulation:
     def __init__(self, mesh: TriangularMesh, dt: float,
-                 D1: float, D2: float, D3: float,
+                 D_diff1: float, D_mig1: float, D_diff2: float, D_mig2: float, D3: float,
                  z1: int, z2: int, epsilon: float, R: float, T: float,
                  L_c: float, c0: float,
                  voltage: float = 0.0,
@@ -112,15 +112,18 @@ class NernstPlanckElectroneutralSimulation:
         # Characteristic scales (match NPP implementation for consistency)
         self.L_c = L_c
         self.phi_c = R * T / self.F  # Thermal voltage
-        self.D_c = max(D1, D2, D3)
+        # Characteristic diffusion scale (use max over all provided coefficients)
+        self.D_c = max(D_diff1, D_diff2, D_mig1, D_mig2, D3)
         self.c0 = c0
         self.tau_c = L_c**2 / self.D_c if self.D_c > 0 else 1.0
 
         # Non-dimensional parameters
         self.dt_dim = dt / self.tau_c
         print("dt_dim:", self.dt_dim)
-        self.D1_dim = D1 / self.D_c if self.D_c > 0 else 0.0
-        self.D2_dim = D2 / self.D_c if self.D_c > 0 else 0.0
+        self.D1_diff_dim = D_diff1 / self.D_c if self.D_c > 0 else 0.0
+        self.D1_mig_dim  = D_mig1  / self.D_c if self.D_c > 0 else 0.0
+        self.D2_diff_dim = D_diff2 / self.D_c if self.D_c > 0 else 0.0
+        self.D2_mig_dim  = D_mig2  / self.D_c if self.D_c > 0 else 0.0
         self.D3_dim = D3 / self.D_c if self.D_c > 0 else 0.0
 
         # valences (kept for API symmetry, z1 should be +1, z2 -1 typically)
@@ -208,16 +211,17 @@ class NernstPlanckElectroneutralSimulation:
         K = self.K_mat
 
         # c-equation blocks
-        J_cc_drift = self._assemble_convection_matrix(phi, self.D1_dim * self.z1)
-        K_c_phi = self.mesh.assemble_coupling_matrix(self.D1_dim * self.z1 * c)
-        J11 = M / self.dt_dim + self.D1_dim * K + J_cc_drift
+        # Drift (migration) uses D_mig1; diffusion uses D_diff1
+        J_cc_drift = self._assemble_convection_matrix(phi, self.D1_mig_dim * self.z1)
+        K_c_phi = self.mesh.assemble_coupling_matrix(self.D1_mig_dim * self.z1 * c)
+        J11 = M / self.dt_dim + self.D1_diff_dim * K + J_cc_drift
         J13 = K_c_phi
 
         # phi-equation blocks from current conservation
         # ∫ (D1+D2) c ∇phi · ∇v -> matrix depending on c
-        K_phi_phi = self.mesh.assemble_coupling_matrix((self.D1_dim + self.D2_dim) * c)
-        # Source-like term - (D1-D2) ∫ ∇c · ∇v -> K @ c
-        J31 = -(self.D1_dim - self.D2_dim) * K
+        K_phi_phi = self.mesh.assemble_coupling_matrix((self.D1_mig_dim + self.D2_mig_dim) * c)
+        # Source-like term - (D_diff1-D_diff2) ∫ ∇c · ∇v -> K @ c
+        J31 = -(self.D1_diff_dim - self.D2_diff_dim) * K
         J33 = K_phi_phi
 
         # Zero blocks
@@ -230,8 +234,8 @@ class NernstPlanckElectroneutralSimulation:
         ]).tocsc()
 
         # Residuals
-        R_c = M @ (c - c_prev) / self.dt_dim + self.D1_dim * K @ c + K_c_phi @ phi
-        R_phi = K_phi_phi @ phi + (-(self.D1_dim - self.D2_dim)) * (K @ c)
+        R_c = M @ (c - c_prev) / self.dt_dim + self.D1_diff_dim * K @ c + K_c_phi @ phi
+        R_phi = K_phi_phi @ phi + (-(self.D1_diff_dim - self.D2_diff_dim)) * (K @ c)
 
         Residual = np.concatenate([R_c, R_phi])
         return Residual, Jacobian
@@ -407,9 +411,12 @@ if __name__ == '__main__':
     dt = 1
     num_steps = 100
 
-    voltage = 1e-1
+    voltage = 1e-4
 
-    sim = NernstPlanckElectroneutralSimulation(mesh, dt, D1, D2, D3, z1, z2, epsilon, R, T, L_c, c0,
+    # Example: set diffusion vs migration coefficients (here using same values for simplicity)
+    D_diff1, D_mig1 = D1, D1
+    D_diff2, D_mig2 = D2, D2
+    sim = NernstPlanckElectroneutralSimulation(mesh, dt, D_diff1, D_mig1, D_diff2, D_mig2, D3, z1, z2, epsilon, R, T, L_c, c0,
                                                voltage=voltage, alpha=0.5, alpha_phi=0.5,
                                                boundary_nodes=boundary_nodes)
 
@@ -417,9 +424,9 @@ if __name__ == '__main__':
     c_init = np.full(mesh.num_nodes(), 0.1)
 
     # Build initial phi by solving the elliptic equation with the current c
-    # K_phi_phi * phi = (D1-D2) * K * c
-    K_phi_phi = sim.mesh.assemble_coupling_matrix((sim.D1_dim + sim.D2_dim) * c_init)
-    rhs = (sim.D1_dim - sim.D2_dim) * (sim.K_mat @ c_init)
+    # K_phi_phi * phi = (D_mig1 + D_mig2) * ... ; rhs uses (D_diff1 - D_diff2)
+    K_phi_phi = sim.mesh.assemble_coupling_matrix((sim.D1_mig_dim + sim.D2_mig_dim) * c_init)
+    rhs = (sim.D1_diff_dim - sim.D2_diff_dim) * (sim.K_mat @ c_init)
     A = K_phi_phi.tolil()
     b = rhs.copy()
     # Dirichlet BCs on phi
@@ -447,8 +454,10 @@ if __name__ == '__main__':
         "R": R,
         "T": T,
         "epsilon": epsilon,
-        "D1": D1,
-        "D2": D2,
+        "D_diff1": D_diff1,
+        "D_mig1": D_mig1,
+        "D_diff2": D_diff2,
+        "D_mig2": D_mig2,
         "D3": D3,
         "z1": z1,
         "z2": z2,

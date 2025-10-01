@@ -5,11 +5,12 @@
 #include <unsupported/Eigen/SparseExtra>
 
 NPENSimulation::NPENSimulation(std::shared_ptr<TetrahedralMesh> mesh, double dt, 
-                               double D1, double D2, double D3, 
+                               double D_diff1, double D_mig1, double D_diff2, double D_mig2, double D3, 
                                int z1, int z2, 
                                double epsilon, double R, double T, 
                                double L_c, double c0)
-    : m_mesh(mesh), m_dt(dt), m_D1(D1), m_D2(D2), m_D3(D3), 
+    : m_mesh(mesh), m_dt(dt), 
+      m_D1_diff(D_diff1), m_D1_mig(D_mig1), m_D2_diff(D_diff2), m_D2_mig(D_mig2), m_D3(D3), 
       m_z1(z1), m_z2(z2), m_epsilon(epsilon), m_R(R), m_T(T), 
       m_L_c(L_c), m_c0(c0) {
     // Compute derived constants
@@ -122,9 +123,11 @@ void NPENSimulation::step(const Eigen::VectorXd& c_prev,
     Eigen::VectorXd phi = phi_prev;
 
     // Dimensionless parameters
-    const double D_c = std::max({m_D1, m_D2, m_D3});
-    const double D1_dim = m_D1 / D_c;
-    const double D2_dim = m_D2 / D_c;
+    const double D_c = std::max({m_D1_diff, m_D2_diff, m_D1_mig, m_D2_mig, m_D3});
+    const double D1_diff_dim = m_D1_diff / D_c;
+    const double D1_mig_dim  = m_D1_mig  / D_c;
+    const double D2_diff_dim = m_D2_diff / D_c;
+    const double D2_mig_dim  = m_D2_mig  / D_c;
     const double D3_dim = m_D3 / D_c; // kept for completeness but unused
     const double dt_dim = m_dt * D_c / (m_L_c * m_L_c);
 
@@ -134,21 +137,21 @@ void NPENSimulation::step(const Eigen::VectorXd& c_prev,
 
     for (int it = 0; it < max_iter; ++it) {
         // Build Jacobian blocks
-        Eigen::SparseMatrix<double> J_cc_drift = assembleConvectionMatrix(phi, D1_dim * m_z1);
-        // Weighted stiffness blocks treating c as coefficient
-        Eigen::VectorXd w_cphi = (D1_dim * m_z1) * c;
+        Eigen::SparseMatrix<double> J_cc_drift = assembleConvectionMatrix(phi, D1_mig_dim * m_z1);
+        // Weighted stiffness blocks treating c as coefficient (migration term)
+        Eigen::VectorXd w_cphi = (D1_mig_dim * m_z1) * c;
         Eigen::SparseMatrix<double> K_c_phi = assembleWeightedStiffness(w_cphi);
-        Eigen::VectorXd w_phiphi = (D1_dim + D2_dim) * c;
+        Eigen::VectorXd w_phiphi = (D1_mig_dim + D2_mig_dim) * c;
         Eigen::SparseMatrix<double> K_phi_phi = assembleWeightedStiffness(w_phiphi);
 
-        Eigen::SparseMatrix<double> J11 = (1.0 / dt_dim) * m_M_c + D1_dim * m_K_c + J_cc_drift;
+        Eigen::SparseMatrix<double> J11 = (1.0 / dt_dim) * m_M_c + D1_diff_dim * m_K_c + J_cc_drift;
         Eigen::SparseMatrix<double> J13 = K_c_phi;
-        Eigen::SparseMatrix<double> J31 = -(D1_dim - D2_dim) * m_K_c;
+        Eigen::SparseMatrix<double> J31 = -(D1_diff_dim - D2_diff_dim) * m_K_c;
         Eigen::SparseMatrix<double> J33 = K_phi_phi;
 
         // Residuals
-        Eigen::VectorXd R_c   = (1.0 / dt_dim) * (m_M_c * (c  - c_prev)) + D1_dim * (m_K_c * c)  + K_c_phi   * phi;
-        Eigen::VectorXd R_phi = K_phi_phi * phi + (-(D1_dim - D2_dim)) * (m_K_c * c);
+        Eigen::VectorXd R_c   = (1.0 / dt_dim) * (m_M_c * (c  - c_prev)) + D1_diff_dim * (m_K_c * c)  + K_c_phi   * phi;
+        Eigen::VectorXd R_phi = K_phi_phi * phi + (-(D1_diff_dim - D2_diff_dim)) * (m_K_c * c);
 
         // Assemble big Jacobian via triplets (order: [c, phi])
         std::vector<Eigen::Triplet<double>> trips;
@@ -221,9 +224,11 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev,
     Eigen::VectorXd phi = phi_prev;
 
     // Dimensionless parameters
-    const double D_c = std::max({m_D1, m_D2, m_D3});
-    const double D1_dim = m_D1 / D_c;
-    const double D2_dim = m_D2 / D_c;
+    const double D_c = std::max({m_D1_diff, m_D2_diff, m_D1_mig, m_D2_mig, m_D3});
+    const double D1_diff_dim = m_D1_diff / D_c;
+    const double D1_mig_dim  = m_D1_mig  / D_c;
+    const double D2_diff_dim = m_D2_diff / D_c;
+    const double D2_mig_dim  = m_D2_mig  / D_c;
     const double D3_dim = m_D3 / D_c;
     const double dt_dim = m_dt * D_c / (m_L_c * m_L_c);
 
@@ -233,15 +238,15 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev,
     double initial_residual_norm = -1.0;
     for (int it = 0; it < max_iter; ++it) {
         // Jacobian blocks (same as step())
-        Eigen::SparseMatrix<double> J_cc_drift = assembleConvectionMatrix(phi, D1_dim * m_z1);
-        Eigen::VectorXd w_cphi = (D1_dim * m_z1) * c;
+        Eigen::SparseMatrix<double> J_cc_drift = assembleConvectionMatrix(phi, D1_mig_dim * m_z1);
+        Eigen::VectorXd w_cphi = (D1_mig_dim * m_z1) * c;
         Eigen::SparseMatrix<double> K_c_phi = assembleWeightedStiffness(w_cphi);
-        Eigen::VectorXd w_phiphi = (D1_dim + D2_dim) * c;
+        Eigen::VectorXd w_phiphi = (D1_mig_dim + D2_mig_dim) * c;
         Eigen::SparseMatrix<double> K_phi_phi = assembleWeightedStiffness(w_phiphi);
 
-        Eigen::SparseMatrix<double> J11 = (1.0 / dt_dim) * m_M_c + D1_dim * m_K_c + J_cc_drift;
+        Eigen::SparseMatrix<double> J11 = (1.0 / dt_dim) * m_M_c + D1_diff_dim * m_K_c + J_cc_drift;
         Eigen::SparseMatrix<double> J13 = K_c_phi;
-        Eigen::SparseMatrix<double> J31 = -(D1_dim - D2_dim) * m_K_c;
+        Eigen::SparseMatrix<double> J31 = -(D1_diff_dim - D2_diff_dim) * m_K_c;
         Eigen::SparseMatrix<double> J33 = K_phi_phi;
 
         // Residuals

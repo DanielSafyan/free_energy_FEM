@@ -59,19 +59,24 @@ def add_current_scalar_to_h5(input_file: str, output_file: str | None = None, ov
         R = float(consts.get('R', 8.314))
         T_K = float(consts.get('T', 298.0))
         F = float(consts.get('F', 96485.33))
-        D1 = float(consts.get('D1', 1e-9))
-        D2 = float(consts.get('D2', 1e-9))
+        # Support split coefficients; fallback to legacy D1/D2 if not present
+        D1_legacy = float(consts.get('D1', 1e-9))
+        D2_legacy = float(consts.get('D2', 1e-9))
+        D_diff1 = float(consts.get('D_diff1', D1_legacy))
+        D_mig1  = float(consts.get('D_mig1',  D1_legacy))
+        D_diff2 = float(consts.get('D_diff2', D2_legacy))
+        D_mig2  = float(consts.get('D_mig2',  D2_legacy))
         z1 = float(consts.get('z1', 1.0))
         z2 = float(consts.get('z2', -1.0))
         c0 = float(consts.get('c0', 10.0))
         phi_c = R * T_K / F
-        ess(f"Constants: R={R}, T={T_K}, F={F}, D1={D1}, D2={D2}, z1={z1}, z2={z2}, c0={c0}, phi_c={phi_c}")
+        ess(f"Constants: R={R}, T={T_K}, F={F}, D_diff1={D_diff1}, D_mig1={D_mig1}, D_diff2={D_diff2}, D_mig2={D_mig2}, z1={z1}, z2={z2}, c0={c0}, phi_c={phi_c}")
 
         if fem_cpp is None:
             raise RuntimeError("fem_core_py not available. Please build C++ core before running.")
 
         cpp_mesh = _build_cpp_mesh(nodes, elements)
-        calculator = fem_cpp.CurrentCalculator(cpp_mesh, R, T_K, F, D1, D2, z1, z2, c0, phi_c)
+        calculator = fem_cpp.CurrentCalculator(cpp_mesh, R, T_K, F, D_diff1, D_mig1, D_diff2, D_mig2, z1, z2, c0, phi_c)
 
         c_hist = data.c[:]
         phi_hist = data.phi[:]

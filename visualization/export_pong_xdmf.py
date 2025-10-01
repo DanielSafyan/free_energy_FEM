@@ -8,18 +8,20 @@ It references:
 - mesh/elements: (M, 4) int64 (tet connectivity)
 - states/c, states/phi, states/current: (T, N) float64 nodal scalar fields
 - states/flux: (T, N, 3) float64 nodal vector field (if present)
+- states/flux_diffusion: (T, N, 3) float64 nodal vector field (if present)
+- states/flux_drift: (T, N, 3) float64 nodal vector field (if present)
 
 Usage:
-  python -m visualization.export_pong_xdmf [<h5_path>] [--out <xdmf_path>] [--fields c,phi,current,flux]
+  python -m visualization.export_pong_xdmf [<h5_path>] [--out <xdmf_path>] [--fields c,phi,current,flux,flux_diffusion,flux_drift]
 Examples:
   python -m visualization.export_pong_xdmf
-  python -m visualization.export_pong_xdmf output/pong_simulation.h5 --out output/pong_simulation.xdmf --fields c,phi,flux
+  python -m visualization.export_pong_xdmf output/pong_simulation.h5 --out output/pong_simulation.xdmf --fields c,phi,flux,flux_diffusion,flux_drift
 
 Notes:
 - Time values come from attrs['dt'] if present; otherwise use step index.
 - XDMF uses HyperSlab to select each timestep from the (T, N) or (T, N, 3) datasets.
 - Scalar fields: c, phi are exported as AttributeType="Scalar"
-- Vector fields: flux is exported as AttributeType="Vector" with 3 components
+- Vector fields: flux, flux_diffusion, flux_drift are exported as AttributeType="Vector" with 3 components
 """
 from __future__ import annotations
 import argparse
@@ -50,7 +52,7 @@ def _detect_fields(f: h5py.File, requested: List[str] | None) -> List[str]:
             if name in grp:
                 available.append(name)
         # Check vector fields
-        for name in ["flux"]:
+        for name in ["flux", "flux_diffusion", "flux_drift"]:
             if name in grp:
                 available.append(name)
     if requested:
@@ -58,7 +60,7 @@ def _detect_fields(f: h5py.File, requested: List[str] | None) -> List[str]:
         # keep only those that exist
         available = [x for x in req if ("states" in f and x in f["states"])]
     if not available:
-        raise RuntimeError("No nodal state fields found under 'states/'. Expected one of: c, phi, current, flux.")
+        raise RuntimeError("No nodal state fields found under 'states/'. Expected one of: c, phi, current, flux, flux_diffusion, flux_drift.")
     return available
 
 
@@ -96,7 +98,7 @@ def build_xdmf(h5_path: str, xdmf_path: str, fields: List[str]) -> str:
         if "states" not in f:
             raise RuntimeError("No 'states' group found in HDF5 file.")
         
-        first_field = next((name for name in ["c", "phi", "current", "flux"] if name in f["states"]), None)
+        first_field = next((name for name in ["c", "phi", "current", "flux", "flux_diffusion", "flux_drift"] if name in f["states"]), None)
         if not first_field:
             raise RuntimeError("No time-series datasets found in 'states/'.")
         
@@ -168,7 +170,7 @@ def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Export XDMF for ParaView from pong_simulation HDF5 output.")
     p.add_argument("h5", nargs="?", default=os.path.join("output", "pong_simulation.h5"), help="Path to HDF5 file.")
     p.add_argument("--out", default=None, help="Output XDMF path. Default: alongside H5 as .xdmf")
-    p.add_argument("--fields", default="c,phi,current,flux", help="Comma-separated nodal fields to include (from /states): e.g. c,phi,current,flux")
+    p.add_argument("--fields", default="c,phi,current,flux,flux_diffusion,flux_drift", help="Comma-separated nodal fields to include (from /states): e.g. c,phi,current,flux,flux_diffusion,flux_drift")
 
     args = p.parse_args(argv)
     h5_path = os.path.abspath(args.h5)
@@ -193,7 +195,7 @@ def main(argv: List[str] | None = None) -> int:
     print(f"Wrote XDMF: {xdmf_path}")
     print(f"References HDF5: {_relpath_to(xdmf_path, h5_path)}")
     print(f"Open the .xdmf in ParaView to visualize {', '.join(repr(f) for f in fields)} over time.")
-    print("Note: Scalar fields (c, c3, phi, current) and vector fields (flux) are supported.")
+    print("Note: Scalar fields (c, c3, phi, current) and vector fields (flux, flux_diffusion, flux_drift) are supported.")
     return 0
 
 

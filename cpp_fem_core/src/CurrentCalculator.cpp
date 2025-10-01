@@ -20,16 +20,18 @@ inline bool normalize_safe(const Vector3d& v, Vector3d& out_unit, double& out_no
 
 CurrentCalculator::CurrentCalculator(std::shared_ptr<TetrahedralMesh> mesh,
                                      double R, double T, double F,
-                                     double D1, double D2,
+                                     double D_diff1, double D_mig1,
+                                     double D_diff2, double D_mig2,
                                      double z1, double z2,
                                      double c0, double phi_c)
     : m_mesh(std::move(mesh)), m_R(R), m_T(T), m_F(F),
-      m_D1(D1), m_D2(D2), m_z1(z1), m_z2(z2), m_c0(c0), m_phi_c(phi_c) {
+      m_D1_diff(D_diff1), m_D1_mig(D_mig1), m_D2_diff(D_diff2), m_D2_mig(D_mig2),
+      m_z1(z1), m_z2(z2), m_c0(c0), m_phi_c(phi_c) {
     if (!m_mesh) throw std::invalid_argument("CurrentCalculator: mesh cannot be null");
-    m_K_GRAD_C1 = -m_D1 * m_c0;
-    m_K_GRAD_C2 = -m_D2 * m_c0;
-    m_K_MIG1    = -(m_z1 * m_F * m_D1 / (m_R * m_T)) * m_phi_c;
-    m_K_MIG2    = -(m_z2 * m_F * m_D2 / (m_R * m_T)) * m_phi_c;
+    m_K_GRAD_C1 = -m_D1_diff * m_c0;
+    m_K_GRAD_C2 = -m_D2_diff * m_c0;
+    m_K_MIG1    = -(m_z1 * m_F * m_D1_mig / (m_R * m_T)) * m_phi_c;
+    m_K_MIG2    = -(m_z2 * m_F * m_D2_mig / (m_R * m_T)) * m_phi_c;
 }
 
 void CurrentCalculator::buildNodeToFacesCache() const {

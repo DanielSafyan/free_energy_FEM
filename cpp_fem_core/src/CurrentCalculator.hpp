@@ -49,8 +49,10 @@ public:
      * @param R      Gas constant
      * @param T      Temperature
      * @param F      Faraday constant
-     * @param D1     Diffusion coeff (species 1)
-     * @param D2     Diffusion coeff (species 2)
+     * @param D_diff1 Diffusion coeff (species 1, for ∇c)
+     * @param D_mig1  Migration coeff (species 1, for c∇ϕ)
+     * @param D_diff2 Diffusion coeff (species 2, for ∇c)
+     * @param D_mig2  Migration coeff (species 2, for c∇ϕ)
      * @param z1     Valence (species 1)
      * @param z2     Valence (species 2)
      * @param c0     Concentration scale to convert dimensionless c -> phys
@@ -58,7 +60,8 @@ public:
      */
     CurrentCalculator(std::shared_ptr<TetrahedralMesh> mesh,
                       double R, double T, double F,
-                      double D1, double D2,
+                      double D_diff1, double D_mig1,
+                      double D_diff2, double D_mig2,
                       double z1, double z2,
                       double c0, double phi_c);
 
@@ -105,8 +108,14 @@ public:
     double getR() const { return m_R; }
     double getT() const { return m_T; }
     double getF() const { return m_F; }
-    double getD1() const { return m_D1; }
-    double getD2() const { return m_D2; }
+    // Backward-compat: return diffusion parts for legacy getters
+    double getD1() const { return m_D1_diff; }
+    double getD2() const { return m_D2_diff; }
+    // New explicit getters (not bound yet):
+    double getD1Diff() const { return m_D1_diff; }
+    double getD1Mig() const { return m_D1_mig; }
+    double getD2Diff() const { return m_D2_diff; }
+    double getD2Mig() const { return m_D2_mig; }
     double getZ1() const { return m_z1; }
     double getZ2() const { return m_z2; }
     double getC0() const { return m_c0; }
@@ -118,13 +127,13 @@ private:
 
     // Physical parameters (match python calculate_current)
     double m_R, m_T, m_F;
-    double m_D1, m_D2;
+    double m_D1_diff, m_D1_mig, m_D2_diff, m_D2_mig;
     double m_z1, m_z2;
     double m_c0, m_phi_c;
 
     // Derived constant factors
-    double m_K_GRAD_C1, m_K_GRAD_C2; // -Dk * c0
-    double m_K_MIG1, m_K_MIG2;       // -(zk * F * Dk / (R*T)) * phi_c
+    double m_K_GRAD_C1, m_K_GRAD_C2; // -D_diff_k * c0
+    double m_K_MIG1, m_K_MIG2;       // -(zk * F * D_mig_k / (R*T)) * phi_c
 
     // Per-node incident face geometry cache
     struct FaceGeom {

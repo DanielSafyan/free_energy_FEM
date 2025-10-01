@@ -263,7 +263,7 @@ def calculate_current(c, phi, measuring_indices):
     - Precompute constant factors from physical parameters.
     """
     # Access globals prepared in __main__
-    global mesh, nodes, elements, R, T, F, D1, D2, z1, z2, c0, sim
+    global mesh, nodes, elements, R, T, F, D_diff1, D_mig1, D_diff2, D_mig2, z1, z2, c0, sim
 
     # Lazy init of caches
     if not hasattr(calculate_current, "_node_to_elements"):
@@ -286,9 +286,9 @@ def calculate_current(c, phi, measuring_indices):
     # Precompute constants once (uses sim.phi_c for scaling phi from dimensionless to V)
     if calculate_current._consts is None:
         phi_c = sim.phi_c
-        # Factors for flux terms
-        K_GRAD_C = (-D1 * c0, -D2 * c0)  # for positive/negative ions, both using c
-        K_MIG = (-(z1 * F * D1 / (R * T)) * phi_c, -(z2 * F * D2 / (R * T)) * phi_c)
+        # Factors for flux terms (split diffusion vs migration)
+        K_GRAD_C = (-D_diff1 * c0, -D_diff2 * c0)
+        K_MIG = (-(z1 * F * D_mig1 / (R * T)) * phi_c, -(z2 * F * D_mig2 / (R * T)) * phi_c)
         calculate_current._consts = (K_GRAD_C, K_MIG)
 
     (K_GRAD_C, K_MIG) = calculate_current._consts
@@ -646,9 +646,18 @@ class PongSimulationNPEN:
         }
         # Include phi_c (thermal voltage) for visualization tools
         phi_c_val = getattr(self.sim, 'phi_c', (self.R * self.T / self.F) if self.F != 0 else 1.0)
+        # Include split transport coefficients in metadata; fall back to legacy D1/D2
+        d_diff1_meta = getattr(self, 'D_diff1', self.D1)
+        d_mig1_meta  = getattr(self, 'D_mig1',  self.D1)
+        d_diff2_meta = getattr(self, 'D_diff2', self.D2)
+        d_mig2_meta  = getattr(self, 'D_mig2',  self.D2)
         constants = {
             "R": self.R, "T": self.T, "F": self.F, "epsilon": self.epsilon,
+            # Legacy keys retained for backward compatibility
             "D1": self.D1, "D2": self.D2, "D3": self.D3,
+            # New split coefficients
+            "D_diff1": float(d_diff1_meta), "D_mig1": float(d_mig1_meta),
+            "D_diff2": float(d_diff2_meta), "D_mig2": float(d_mig2_meta),
             "z1": self.z1, "z2": self.z2, "chi": self.chi, "c0": self.c0,
             "phi_c": float(phi_c_val),
             "k_reaction": k_reaction,
@@ -662,12 +671,16 @@ class PongSimulationNPEN:
         measuring_voltage = self.applied_voltage / 10.0
 
         # Provide globals for calculate_current without refactoring it
-        global mesh, nodes, elements, R, T, F, D1, D2, z1, z2, c0, sim
+        global mesh, nodes, elements, R, T, F, D_diff1, D_mig1, D_diff2, D_mig2, z1, z2, c0, sim
         mesh = self.mesh
         nodes = self.nodes
         elements = self.elements
         R, T, F = self.R, self.T, self.F
-        D1, D2 = self.D1, self.D2
+        # Backward compatibility: if split coefficients aren't part of the simulation, use D1/D2 for both
+        D_diff1 = getattr(self, 'D_diff1', self.D1)
+        D_mig1  = getattr(self, 'D_mig1',  self.D1)
+        D_diff2 = getattr(self, 'D_diff2', self.D2)
+        D_mig2  = getattr(self, 'D_mig2',  self.D2)
         z1, z2 = self.z1, self.z2
         c0 = self.c0
         sim = self.sim

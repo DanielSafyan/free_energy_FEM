@@ -29,7 +29,8 @@ PYBIND11_MODULE(fem_core_py, m) {
     
     // Bind NPENSimulation class
     py::class_<NPENSimulation, std::shared_ptr<NPENSimulation>>(m, "NPENSimulation")
-        .def(py::init<std::shared_ptr<TetrahedralMesh>, double, double, double, double, 
+        .def(py::init<std::shared_ptr<TetrahedralMesh>, double,
+                      double, double, double, double, double,
                       int, int, double, double, double, double, double>())
         .def("step", [](NPENSimulation& self, 
                          const Eigen::VectorXd& c_prev, 
@@ -86,10 +87,10 @@ PYBIND11_MODULE(fem_core_py, m) {
     // Bind CurrentCalculator class
     py::class_<CurrentCalculator, std::shared_ptr<CurrentCalculator>>(m, "CurrentCalculator")
         .def(py::init<std::shared_ptr<TetrahedralMesh>, double, double, double,
-                      double, double, double, double, double, double>(),
+                      double, double, double, double, double, double, double, double>(),
              py::arg("mesh"), py::arg("R"), py::arg("T"), py::arg("F"),
-             py::arg("D1"), py::arg("D2"), py::arg("z1"), py::arg("z2"),
-             py::arg("c0"), py::arg("phi_c"))
+             py::arg("D_diff1"), py::arg("D_mig1"), py::arg("D_diff2"), py::arg("D_mig2"),
+             py::arg("z1"), py::arg("z2"), py::arg("c0"), py::arg("phi_c"))
         .def("computeCurrentScalar", [](CurrentCalculator& self,
                                          const Eigen::VectorXd& c,
                                          const Eigen::VectorXd& phi) {
