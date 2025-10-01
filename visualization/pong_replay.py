@@ -21,6 +21,96 @@ except Exception:
     PongH5ReaderNPEN = None
 
 
+def print_h5_metadata(h5_path: str, use_npen: bool = False) -> None:
+    """Print a concise metadata summary for a Pong HDF5 dataset.
+
+    Shows attrs (nx, ny, nz, dt), constants, dataset lengths, and optional datasets.
+    """
+    Reader = PongH5ReaderNPEN if use_npen and (PongH5ReaderNPEN is not None) else PongH5ReaderNPP
+    # Best effort: remove legacy states/c3 if present (read/write safe)
+    try:
+        with h5py.File(h5_path, 'r+') as f:
+            if 'states' in f and 'c3' in f['states']:
+                del f['states']['c3']
+                try:
+                    f.flush()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    with Reader(h5_path) as data:
+        # Basic attributes
+        attrs = getattr(data, 'attrs', {})
+        consts = getattr(data, 'constants', {})
+        try:
+            nodes_shape = tuple(np.shape(data.nodes))  # (Nnodes, 3)
+        except Exception:
+            nodes_shape = None
+        try:
+            elements_shape = tuple(np.shape(data.elements))  # (Ne, 4)
+        except Exception:
+            elements_shape = None
+
+        # Time series shapes
+        try:
+            ball_T = int(np.shape(data.ball_pos)[0])
+        except Exception:
+            ball_T = None
+        try:
+            plat_T = int(np.shape(data.platform_pos)[0])
+        except Exception:
+            plat_T = None
+        # NPEN vs NPP concentrations
+        if use_npen and hasattr(data, 'c'):
+            try:
+                c_T = int(np.shape(data.c)[0])
+            except Exception:
+                c_T = None
+            c_label = 'c'
+        else:
+            try:
+                c1_T = int(np.shape(data.c1)[0])
+                c2_T = int(np.shape(data.c2)[0])
+            except Exception:
+                c1_T = c2_T = None
+            c_T = (c1_T, c2_T)
+            c_label = 'c1/c2'
+        try:
+            phi_T = int(np.shape(data.phi)[0])
+        except Exception:
+            phi_T = None
+        score_present = getattr(data, 'score', None) is not None
+        curr_present = getattr(data, 'measured_current', None) is not None
+
+        # Print summary
+        print("=== HDF5 Metadata Summary ===")
+        print(f"File: {h5_path}")
+        if attrs:
+            nx = attrs.get('nx'); ny = attrs.get('ny'); nz = attrs.get('nz')
+            dt = attrs.get('dt')
+            print(f"attrs: nx={nx}, ny={ny}, nz={nz}, dt={dt}")
+        else:
+            print("attrs: <none>")
+        if consts:
+            try:
+                # Show a small, stable subset if available
+                keys = sorted(list(consts.keys()))
+                preview = {k: consts.get(k) for k in keys}
+                print(f"constants: {preview}")
+            except Exception:
+                print("constants: <unavailable>")
+        else:
+            print("constants: <none>")
+        if nodes_shape:
+            print(f"nodes: shape={nodes_shape}")
+        if elements_shape:
+            print(f"elements: shape={elements_shape}")
+        print(f"time series lengths: ball_pos={ball_T}, platform_pos={plat_T}, {c_label}={c_T}, phi={phi_T}")
+        print(f"optional datasets: score={'yes' if score_present else 'no'}, measured_current={'yes' if curr_present else 'no'}")
+        print("==============================")
+
+
 def _structured_get_node_idx(i: int, j: int, k: int, ny: int, nz: int) -> int:
     """Map structured grid indices (i,j,k) to node index.
 
@@ -818,14 +908,15 @@ def main():
                         help="Output MP4 file path (default: output/pong_replay.mp4)")
     parser.add_argument("--npen", action="store_true", help="Use NPEN HDF5 layout (states/c instead of c1/c2)")
     parser.add_argument("--ts", choices=["s", "ms", "mms", "ns"], default=None,
-                        help="Time scale for plotting (overrides auto): s seconds, ms milliseconds, mms microseconds, ns nanoseconds")
+                         help="Time scale for plotting (overrides auto): s seconds, ms milliseconds, mms microseconds, ns nanoseconds")
     parser.add_argument("--step", type=int, default=1,
-                         help=(
-                             "Sampling stride (>=1): only every Nth timestep is plotted. "
-                             "When --change is set, the delta is computed vs the frame that is 'step' raw timesteps earlier."
-                         ))
+                          help=(
+                              "Sampling stride (>=1): only every Nth timestep is plotted. "
+                              "When --change is set, the delta is computed vs the frame that is 'step' raw timesteps earlier."
+                          ))
     parser.add_argument("--current", action="store_true",
-                        help="Show an extra window plotting the current-based quadratic used for paddle position (marks at x=0,200,400)")
+                         help="Show an extra window plotting the current-based quadratic used for paddle position (marks at x=0,200,400)")
+    parser.add_argument("--metadata", action="store_true", help="Print metadata summary from the HDF5 file")
     args = parser.parse_args()
 
     try:
@@ -842,6 +933,9 @@ def main():
         e_idx = int(np.ceil(max(0.0, min(1.0, args.until_frac)) * _T))
         print(f"Dataset length (timesteps): {_T}")
         print(f"Using slice [{s_idx}:{e_idx}] (fraction {args.start_frac:.3f} to {args.until_frac:.3f}), step={args.step}")
+
+        if args.metadata:
+            print_h5_metadata(args.h5, use_npen=args.npen)
 
         if args.zy and args.zx:
             raise ValueError("Cannot combine --zy and --zx. Choose one plane when using --sum.")

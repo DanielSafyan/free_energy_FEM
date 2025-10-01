@@ -14,6 +14,82 @@ except Exception:
     PongH5ReaderNPEN = None
 
 
+def print_h5_metadata(h5_path: str, use_npen: bool = False) -> None:
+    """Print a concise metadata summary for a Pong HDF5 dataset.
+
+    Shows attrs (nx, ny, nz, dt), constants, dataset lengths, and optional datasets.
+    """
+    Reader = PongH5ReaderNPEN if use_npen and (PongH5ReaderNPEN is not None) else PongH5ReaderNPP
+    # Best effort: remove legacy states/c3 if present (read/write safe)
+    try:
+        with h5py.File(h5_path, 'r+') as f:
+            if 'states' in f and 'c3' in f['states']:
+                del f['states']['c3']
+                try:
+                    f.flush()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    with Reader(h5_path) as data:
+        attrs = getattr(data, 'attrs', {})
+        consts = getattr(data, 'constants', {})
+        try:
+            nodes_shape = tuple(np.shape(data.nodes))
+        except Exception:
+            nodes_shape = None
+        try:
+            elements_shape = tuple(np.shape(data.elements))
+        except Exception:
+            elements_shape = None
+
+        # Time series lengths
+        def _len_safe(x):
+            try:
+                return int(np.shape(x)[0])
+            except Exception:
+                return None
+        ball_T = _len_safe(getattr(data, 'ball_pos', None))
+        plat_T = _len_safe(getattr(data, 'platform_pos', None))
+        if use_npen and hasattr(data, 'c'):
+            c_info = _len_safe(data.c)
+            c_label = 'c'
+        else:
+            c1_T = _len_safe(getattr(data, 'c1', None))
+            c2_T = _len_safe(getattr(data, 'c2', None))
+            c_info = (c1_T, c2_T)
+            c_label = 'c1/c2'
+        phi_T = _len_safe(getattr(data, 'phi', None))
+        score_present = getattr(data, 'score', None) is not None
+        curr_present = getattr(data, 'measured_current', None) is not None
+
+        print("=== HDF5 Metadata Summary ===")
+        print(f"File: {h5_path}")
+        if attrs:
+            nx = attrs.get('nx'); ny = attrs.get('ny'); nz = attrs.get('nz')
+            dt = attrs.get('dt')
+            print(f"attrs: nx={nx}, ny={ny}, nz={nz}, dt={dt}")
+        else:
+            print("attrs: <none>")
+        if consts:
+            try:
+                keys = sorted(list(consts.keys()))
+                preview = {k: consts.get(k) for k in keys}
+                print(f"constants: {preview}")
+            except Exception:
+                print("constants: <unavailable>")
+        else:
+            print("constants: <none>")
+        if nodes_shape:
+            print(f"nodes: shape={nodes_shape}")
+        if elements_shape:
+            print(f"elements: shape={elements_shape}")
+        print(f"time series lengths: ball_pos={ball_T}, platform_pos={plat_T}, {c_label}={c_info}, phi={phi_T}")
+        print(f"optional datasets: score={'yes' if score_present else 'no'}, measured_current={'yes' if curr_present else 'no'}")
+        print("==============================")
+
+
 def tetra_volume(p0: np.ndarray, p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> float:
     """Compute the volume of a tetrahedron defined by 4 points."""
     return abs(np.dot(p1 - p0, np.cross(p2 - p0, p3 - p0))) / 6.0
@@ -365,6 +441,7 @@ def main():
                         help='Plot the electric component of free energy (total - diffusion component) instead of total free energy')
     parser.add_argument('--score-only', action='store_true',
                         help='Only plot the lower half with the score (cumulative score or hitrate)')
+    parser.add_argument('--metadata', action='store_true', help='Print metadata summary from the HDF5 file')
     args = parser.parse_args()
 
     # Validate mutually exclusive flags
@@ -409,6 +486,9 @@ def main():
                 return 1e6, 'µs'
             return 1e9, 'ns'
         t_scale, t_unit = _time_scale_from_flag(args.ts, dt)
+
+        if args.metadata:
+            print_h5_metadata(args.h5, use_npen=args.npen)
 
         # Compute cumulative score over time using the same slicing window
         score_t, cum_scores = compute_cumulative_score_over_time(
