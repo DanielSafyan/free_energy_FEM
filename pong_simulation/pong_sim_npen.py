@@ -462,28 +462,28 @@ class PongSimulationNPEN:
         """Compute electrode node indices using instance grid size."""
         nx, ny, nz = self.nx, self.ny, self.nz
         gi = self.get_node_idx
-        sensing_electrode11_idx = gi(nx//4, ny//4, 0)
-        sensing_electrode12_idx = gi(nx//4, ny//4, nz)
-        sensing_electrode21_idx = gi(nx//4, 2*ny//4, 0)
-        sensing_electrode22_idx = gi(nx//4, 2*ny//4, nz)
-        sensing_electrode31_idx = gi(nx//4, 3*ny//4, 0)
-        sensing_electrode32_idx = gi(nx//4, 3*ny//4, nz)
+        sensing_electrode11_idx = gi(nx//4, ny//4, 1)
+        sensing_electrode12_idx = gi(nx//4, ny//4, nz-1)
+        sensing_electrode21_idx = gi(nx//4, 2*ny//4, 1)
+        sensing_electrode22_idx = gi(nx//4, 2*ny//4, nz-1)
+        sensing_electrode31_idx = gi(nx//4, 3*ny//4, 1)
+        sensing_electrode32_idx = gi(nx//4, 3*ny//4, nz-1)
 
         # 3 stimulating electrode pairs in the middle row at y = 2*ny//4
-        stimulating_electrode11_idx = gi(2*nx//4, ny//4, 0)
-        stimulating_electrode12_idx = gi(2*nx//4, ny//4, nz)
-        stimulating_electrode21_idx = gi(2*nx//4, 2*ny//4, 0)
-        stimulating_electrode22_idx = gi(2*nx//4, 2*ny//4, nz)
-        stimulating_electrode31_idx = gi(2*nx//4, 3*ny//4, 0)
-        stimulating_electrode32_idx = gi(2*nx//4, 3*ny//4, nz)
+        stimulating_electrode11_idx = gi(2*nx//4, ny//4, 1)
+        stimulating_electrode12_idx = gi(2*nx//4, ny//4, nz-1)
+        stimulating_electrode21_idx = gi(2*nx//4, 2*ny//4, 1)
+        stimulating_electrode22_idx = gi(2*nx//4, 2*ny//4, nz-1)
+        stimulating_electrode31_idx = gi(2*nx//4, 3*ny//4, 1)
+        stimulating_electrode32_idx = gi(2*nx//4, 3*ny//4, nz-1)
 
         # 3 stimulating electrode pairs in the upper row at y = 3*ny//4
-        stimulating_electrode41_idx = gi(3*nx//4, ny//4, 0)
-        stimulating_electrode42_idx = gi(3*nx//4, ny//4, nz)
-        stimulating_electrode51_idx = gi(3*nx//4, 2*ny//4, 0)
-        stimulating_electrode52_idx = gi(3*nx//4, 2*ny//4, nz)
-        stimulating_electrode61_idx = gi(3*nx//4, 3*ny//4, 0)
-        stimulating_electrode62_idx = gi(3*nx//4, 3*ny//4, nz)
+        stimulating_electrode41_idx = gi(3*nx//4, ny//4, 1)
+        stimulating_electrode42_idx = gi(3*nx//4, ny//4, nz-1)
+        stimulating_electrode51_idx = gi(3*nx//4, 2*ny//4, 1)
+        stimulating_electrode52_idx = gi(3*nx//4, 2*ny//4, nz-1)
+        stimulating_electrode61_idx = gi(3*nx//4, 3*ny//4, 1)
+        stimulating_electrode62_idx = gi(3*nx//4, 3*ny//4, nz-1)
 
         return [
             sensing_electrode11_idx,
