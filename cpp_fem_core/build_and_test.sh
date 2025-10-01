@@ -18,10 +18,44 @@ cd build
 
 # Configure with CMake
 echo "Configuring with CMake (HDF5 disabled by default; set DISABLE_HDF5=OFF to enable detection)"
-cmake -DCMAKE_DISABLE_FIND_PACKAGE_HDF5=${DISABLE_HDF5:-ON} ..
 
-# Build
-cmake --build . -j
+# Resolve Python executable path to pass to CMake
+PY_PATH=$(command -v "$PYTHON_BIN" || true)
+if [ -n "$PY_PATH" ]; then
+  echo "Passing Python to CMake: $PY_PATH"
+  PY_ARG=(-DPython3_EXECUTABLE="$PY_PATH")
+else
+  PY_ARG=()
+fi
+
+# Optionally pass Eigen include dir and pybind11_DIR if available
+EXTRA_ARGS=()
+if [ -n "${EIGEN3_INCLUDE_DIR:-}" ]; then
+  EXTRA_ARGS+=("-DEIGEN3_INCLUDE_DIR=${EIGEN3_INCLUDE_DIR}")
+fi
+PYBIND11_DIR=$("$PYTHON_BIN" -c 'import sys;\ntry:\n import pybind11 as p; print(p.get_cmake_dir())\nexcept Exception:\n pass' 2>/dev/null | head -n1)
+if [ -n "$PYBIND11_DIR" ]; then
+  echo "Detected pybind11 CMake dir: $PYBIND11_DIR"
+  EXTRA_ARGS+=("-Dpybind11_DIR=$PYBIND11_DIR")
+fi
+
+cmake -DCMAKE_DISABLE_FIND_PACKAGE_HDF5=${DISABLE_HDF5:-ON} "${PY_ARG[@]}" "${EXTRA_ARGS[@]}" ..
+
+# Build (capture output for diagnostics on failure)
+BUILD_LOG="build.log"
+echo "Building (logging to $BUILD_LOG)..."
+set +e
+cmake --build . -j 2>&1 | tee "$BUILD_LOG"
+BUILD_STATUS=${PIPESTATUS[0]}
+set -e
+if [ $BUILD_STATUS -ne 0 ]; then
+  echo "\nERROR: CMake build failed with status $BUILD_STATUS"
+  if [ -f "$BUILD_LOG" ]; then
+    echo "Showing last 200 lines of $BUILD_LOG:";
+    tail -n 200 "$BUILD_LOG"
+  fi
+  exit $BUILD_STATUS
+fi
 
 # Ensure smoke test uses the same Python as CMake (PYTHON3_EXECUTABLE or Python3_EXECUTABLE)
 CM_CACHE=$(cmake -LA -N .)

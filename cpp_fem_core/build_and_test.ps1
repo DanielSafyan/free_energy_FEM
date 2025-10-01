@@ -147,10 +147,25 @@ Write-Host "Configuring with CMake (HDF5 disabled by default; set DISABLE_HDF5=O
 cmake @cmakeArgs ..
 if ($LASTEXITCODE -ne 0) { Write-Error "CMake configure failed ($LASTEXITCODE)"; exit $LASTEXITCODE }
 
-# Build
+# Build (capture output for diagnostics on failure)
 $buildArgs = @('--config', $Config, '-j')
-cmake --build . @buildArgs
-if ($LASTEXITCODE -ne 0) { Write-Error "CMake build failed ($LASTEXITCODE)"; exit $LASTEXITCODE }
+$BUILD_LOG = "build.log"
+Write-Host "Building (logging to $BUILD_LOG)..."
+Remove-Item $BUILD_LOG -ErrorAction SilentlyContinue
+
+# Run the build, capture output and exit code, then tee buffered output
+"" | Out-File -FilePath $BUILD_LOG -Encoding utf8 -Force
+$buildOutput = & cmake --build . @buildArgs 2>&1
+$buildStatus = $LASTEXITCODE
+$buildOutput | Tee-Object -FilePath $BUILD_LOG
+if ($buildStatus -ne 0) {
+  Write-Host "`nERROR: CMake build failed with status $buildStatus"
+  if (Test-Path $BUILD_LOG) {
+    Write-Host "Showing last 200 lines of $BUILD_LOG:"
+    Get-Content $BUILD_LOG -Tail 200 | ForEach-Object { Write-Host $_ }
+  }
+  exit $buildStatus
+}
 
 # Ensure smoke test uses the same Python as CMake (PYTHON3_EXECUTABLE or Python3_EXECUTABLE)
 try {
