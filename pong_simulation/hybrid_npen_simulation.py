@@ -86,6 +86,38 @@ class HybridNPENwithFOReaction:
         return self._sim.step2(c_initial, phi_initial, electrode_indices, applied_voltages, 
                                k_reaction, rtol, atol, max_iter)
 
+    def step2_many(self, c_initial, phi_initial, electrode_indices, applied_voltages,
+                   steps, rtol=1e-3, atol=1e-14, max_iter=50, k_reaction=0.5):
+        """Perform multiple simulation steps in C++ if available; Python fallback loops."""
+        import numpy as _np
+        if self.use_cpp:
+            try:
+                c_initial = _np.asarray(c_initial, dtype=_np.float64)
+                phi_initial = _np.asarray(phi_initial, dtype=_np.float64)
+                electrode_indices = _np.asarray(electrode_indices, dtype=_np.int32)
+                applied_voltages = _np.asarray(applied_voltages, dtype=_np.float64)
+                c_hist, phi_hist = self._cpp_sim.step2_many(
+                    c_initial, phi_initial, electrode_indices, applied_voltages,
+                    int(steps), rtol, atol, int(max_iter), k_reaction
+                )
+                return c_hist, phi_hist
+            except Exception as e:
+                print(f"C++ step2_many failed, falling back to Python: {e}")
+                # fall through to Python fallback
+        # Python fallback: loop and collect history
+        c_prev = _np.asarray(c_initial, dtype=_np.float64)
+        phi_prev = _np.asarray(phi_initial, dtype=_np.float64)
+        N = c_prev.shape[0]
+        c_hist = _np.zeros((N, int(steps)), dtype=_np.float64)
+        phi_hist = _np.zeros((N, int(steps)), dtype=_np.float64)
+        for s in range(int(steps)):
+            c_next, phi_next = self._sim.step2(c_prev, phi_prev, electrode_indices, applied_voltages,
+                                               k_reaction, rtol, atol, max_iter)
+            c_hist[:, s] = c_next
+            phi_hist[:, s] = phi_next
+            c_prev, phi_prev = c_next, phi_next
+        return c_hist, phi_hist
+
     def __getattr__(self, name):
         """Delegate attribute access to the base simulation object"""
         return getattr(self._sim, name)

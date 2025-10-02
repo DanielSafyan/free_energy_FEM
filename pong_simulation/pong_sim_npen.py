@@ -707,22 +707,43 @@ class PongSimulationNPEN:
                         
                         measuring_pattern = [0, measuring_voltage, 0, measuring_voltage, 0, measuring_voltage]
                         voltage_amount = measuring_pattern + voltage_pattern
-                        for _ in range(rl_steps):
-                            c_prev = c.copy()
-                            c, phi = self.sim.step2(
-                                c_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
+                        # Run RL steps entirely in core if available
+                        if hasattr(self.sim, 'step2_many'):
+                            c_hist, phi_hist = self.sim.step2_many(
+                                c, phi, self.voltage_indices, voltage_amount,
+                                int(rl_steps), rtol=1e-3, atol=1e-14, max_iter=50, k_reaction=k_reaction
                             )
-                            # During RL perturbation, measured current is undefined; log NaNs
-                            self._append_step(
-                                dsets,
-                                c,
-                                phi,
-                                pong_game.get_ball_position(),
-                                pong_game.get_platform_position(),
-                                pong_game.score,
-                                (np.nan, np.nan, np.nan),
-                                voltage_amount,
-                            )
+                            # Append each RL step to H5 (currents are NaN during RL perturbation)
+                            for s in range(c_hist.shape[1]):
+                                c = c_hist[:, s]
+                                phi = phi_hist[:, s]
+                                self._append_step(
+                                    dsets,
+                                    c,
+                                    phi,
+                                    pong_game.get_ball_position(),
+                                    pong_game.get_platform_position(),
+                                    pong_game.score,
+                                    (np.nan, np.nan, np.nan),
+                                    voltage_amount,
+                                )
+                        else:
+                            for _ in range(rl_steps):
+                                c_prev = c.copy()
+                                c, phi = self.sim.step2(
+                                    c_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
+                                )
+                                # During RL perturbation, measured current is undefined; log NaNs
+                                self._append_step(
+                                    dsets,
+                                    c,
+                                    phi,
+                                    pong_game.get_ball_position(),
+                                    pong_game.get_platform_position(),
+                                    pong_game.score,
+                                    (np.nan, np.nan, np.nan),
+                                    voltage_amount,
+                                )
                     
 
                 # Sense ball position -> voltage pattern
@@ -772,11 +793,21 @@ class PongSimulationNPEN:
                 voltage_amount = measuring_pattern + voltage_pattern
 
                 # Simulation steps
-                for _ in range(sim_ticks):
-                    c_prev = c.copy()
-                    c, phi = self.sim.step2(
-                        c_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
+                if hasattr(self.sim, 'step2_many'):
+                    c_hist, phi_hist = self.sim.step2_many(
+                        c, phi, self.voltage_indices, voltage_amount,
+                        int(sim_ticks), rtol=1e-3, atol=1e-14, max_iter=50, k_reaction=k_reaction
                     )
+                    # Use the final state; intermediate sim ticks are not logged in this phase
+                    if c_hist.shape[1] > 0:
+                        c = c_hist[:, -1]
+                        phi = phi_hist[:, -1]
+                else:
+                    for _ in range(sim_ticks):
+                        c_prev = c.copy()
+                        c, phi = self.sim.step2(
+                            c_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
+                        )
 
                 # Measure current and update platform
                 if electrode_type == "cathode":

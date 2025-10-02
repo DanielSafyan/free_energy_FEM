@@ -210,6 +210,35 @@ void NPENSimulation::step(const Eigen::VectorXd& c_prev,
     phi_next = phi;
 }
 
+void NPENSimulation::step2_many(const Eigen::VectorXd& c0,
+                                const Eigen::VectorXd& phi0,
+                                const Eigen::VectorXi& electrode_indices,
+                                const Eigen::VectorXd& applied_voltages,
+                                int steps,
+                                Eigen::MatrixXd& c_hist,
+                                Eigen::MatrixXd& phi_hist,
+                                double rtol, double atol, int max_iter, double k_reaction) {
+    const int N = static_cast<int>(m_mesh->numNodes());
+    if (steps <= 0) {
+        c_hist.resize(N, 0);
+        phi_hist.resize(N, 0);
+        return;
+    }
+    c_hist.resize(N, steps);
+    phi_hist.resize(N, steps);
+    Eigen::VectorXd c_prev = c0;
+    Eigen::VectorXd phi_prev = phi0;
+    Eigen::VectorXd c_next(N), phi_next(N);
+    for (int s = 0; s < steps; ++s) {
+        step2(c_prev, phi_prev, electrode_indices, applied_voltages,
+              c_next, phi_next, rtol, atol, max_iter, k_reaction);
+        c_hist.col(s) = c_next;
+        phi_hist.col(s) = phi_next;
+        c_prev.swap(c_next);
+        phi_prev.swap(phi_next);
+    }
+}
+
 void NPENSimulation::step2(const Eigen::VectorXd& c_prev,
                            const Eigen::VectorXd& phi_prev,
                            const Eigen::VectorXi& electrode_indices, 

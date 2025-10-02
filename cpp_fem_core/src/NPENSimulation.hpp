@@ -29,6 +29,17 @@ public:
                Eigen::VectorXd& c_next,
                Eigen::VectorXd& phi_next,
                double rtol = 1e-3, double atol = 1e-14, int max_iter = 50, double k_reaction = 0.5);
+
+    // Perform multiple time steps with fixed electrode voltages.
+    // Outputs histories with shape (N_nodes, steps), each column is the state after that step.
+    void step2_many(const Eigen::VectorXd& c0,
+                    const Eigen::VectorXd& phi0,
+                    const Eigen::VectorXi& electrode_indices,
+                    const Eigen::VectorXd& applied_voltages,
+                    int steps,
+                    Eigen::MatrixXd& c_hist,
+                    Eigen::MatrixXd& phi_hist,
+                    double rtol = 1e-3, double atol = 1e-14, int max_iter = 50, double k_reaction = 0.5);
     
     // Getters for physical constants
     double getPhiC() const { return m_phi_c; }
