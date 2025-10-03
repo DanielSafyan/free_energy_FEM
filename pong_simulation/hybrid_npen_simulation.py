@@ -51,12 +51,11 @@ class HybridNPENwithFOReaction:
             try:
                 # Construct C++ mesh and simulation using the provided mesh
                 self._cpp_mesh = fem_cpp.TetrahedralMesh(mesh.nodes, mesh.elements)
-                # Backward compatibility: use D1/D2 for both diffusion and migration parts
+                # C++ NPENSimulation signature: (mesh, dt, D1, D2, D3, z1, z2, epsilon, R, T, L_c, c0)
                 self._cpp_sim = fem_cpp.NPENSimulation(
-                    self._cpp_mesh, dt,
-                    D1, D1,  # D_diff1, D_mig1
-                    D2, D2,  # D_diff2, D_mig2
-                    D3, z1, z2, epsilon, R, T, L_c, c0
+                    self._cpp_mesh,
+                    float(dt), float(D1), float(D2), float(D3),
+                    int(z1), int(z2), float(epsilon), float(R), float(T), float(L_c), float(c0)
                 )
                 print("C++ FEM core initialized for NPEN.")
             except Exception as e:
