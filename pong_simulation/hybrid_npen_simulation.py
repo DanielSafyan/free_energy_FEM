@@ -51,13 +51,30 @@ class HybridNPENwithFOReaction:
             try:
                 # Construct C++ mesh and simulation using the provided mesh
                 self._cpp_mesh = fem_cpp.TetrahedralMesh(mesh.nodes, mesh.elements)
-                # C++ NPENSimulation signature: (mesh, dt, D1, D2, D3, z1, z2, epsilon, R, T, L_c, c0)
-                self._cpp_sim = fem_cpp.NPENSimulation(
-                    self._cpp_mesh,
-                    float(dt), float(D1), float(D2), float(D3),
-                    int(z1), int(z2), float(epsilon), float(R), float(T), float(L_c), float(c0)
-                )
-                print("C++ FEM core initialized for NPEN.")
+                # Try platform-specific signatures in order of preference.
+                # 1) 14-arg signature (dt, D1_diff, D2_diff, D3, D1_mig, D2_mig, z1, z2, eps, R, T, L_c, c0)
+                try:
+                    self._cpp_sim = fem_cpp.NPENSimulation(
+                        self._cpp_mesh,
+                        float(dt),
+                        float(D1), float(D2), float(D3),
+                        float(D1), float(D2),
+                        int(z1), int(z2),
+                        float(epsilon), float(R), float(T), float(L_c), float(c0)
+                    )
+                    print("C++ FEM core initialized for NPEN (14-arg signature).")
+                except Exception as e14:
+                    # 2) 12-arg signature (dt, D1, D2, D3, z1, z2, eps, R, T, L_c, c0)
+                    try:
+                        self._cpp_sim = fem_cpp.NPENSimulation(
+                            self._cpp_mesh,
+                            float(dt), float(D1), float(D2), float(D3),
+                            int(z1), int(z2), float(epsilon), float(R), float(T), float(L_c), float(c0)
+                        )
+                        print("C++ FEM core initialized for NPEN (12-arg signature).")
+                    except Exception as e12:
+                        print(f"Failed to initialize C++ core: {e12}. Falling back to Python.")
+                        self.use_cpp = False
             except Exception as e:
                 print(f"Failed to initialize C++ core: {e}. Falling back to Python.")
                 self.use_cpp = False
