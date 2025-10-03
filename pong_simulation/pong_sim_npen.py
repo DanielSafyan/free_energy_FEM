@@ -601,7 +601,8 @@ class PongSimulationNPEN:
     def run(self, electrode_type="anode",activation = "poly_normed",rl=False,
             rl_steps=8,sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5,
             output_path=None, checkpoint=None,
-            vision_impairment_type: "VisionImpairmentType" = VisionImpairmentType.NONE):
+            vision_impairment_type: "VisionImpairmentType" = VisionImpairmentType.NONE, 
+            rl_diffusion=False):
         # Initialize pygame/game
         pygame.init()
         screen = pygame.display.set_mode((self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
@@ -702,8 +703,11 @@ class PongSimulationNPEN:
                     if rl:
                         # give chaotic signals to increase plasticity for a short time
                         # invert voltage pattern
-                        voltage_pattern = [0] * 12
-                        for i in range(6): voltage_pattern[2*i] = -self.applied_voltage
+                        if not rl_diffusion:
+                            voltage_pattern = [0] * 12
+                            for i in range(6): voltage_pattern[2*i] = -self.applied_voltage
+                        else:
+                            voltage_pattern = [np.nan] * 12
                         
                         measuring_pattern = [0, measuring_voltage, 0, measuring_voltage, 0, measuring_voltage]
                         voltage_amount = measuring_pattern + voltage_pattern
