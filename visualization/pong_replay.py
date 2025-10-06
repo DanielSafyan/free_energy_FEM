@@ -280,13 +280,16 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 step: int = 1,
                 change: bool = False,
                 time_scale: str | None = None,
-                show_current: bool = False):
+                show_current: bool = False,
+                show_current_raw: bool = False,
+                no_game: bool = False):
     """
     Replay the Pong game using positions recorded in an HDF5 file.
 
     Parameters:
     - h5_path: Path to the HDF5 file produced by pong_simulation.
     - fps: Frames per second for replay.
+    - no_game: If True, do not initialize pygame or read/use game datasets. Only visualize fields (and optional current plots).
     """
     if not os.path.exists(h5_path):
         raise FileNotFoundError(f"HDF5 file not found: {h5_path}")
@@ -306,8 +309,13 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
         pass
     # Load time series lazily
     with Reader(h5_path) as data:
-        ball_ds = data.ball_pos  # shape (T, 2)
-        plat_ds = data.platform_pos  # shape (T,)
+        # Game datasets (optional when --no-game)
+        if not no_game:
+            ball_ds = data.ball_pos  # shape (T, 2)
+            plat_ds = data.platform_pos  # shape (T,)
+        else:
+            ball_ds = None
+            plat_ds = None
         # NPEN provides a single salt concentration `c`; map to both channels for compatibility
         is_npen = bool(use_npen and hasattr(data, 'c'))
         if is_npen:
@@ -323,9 +331,15 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
         curr_ds = getattr(data, "measured_current", None)
         nodes = data.nodes[...]
         attrs = data.attrs
-        num_frames = min(ball_ds.shape[0], plat_ds.shape[0], c1_ds.shape[0], c2_ds.shape[0], phi_ds.shape[0])
-        if score_ds is not None:
-            num_frames = min(num_frames, score_ds.shape[0])
+        if not no_game:
+            num_frames = min(ball_ds.shape[0], plat_ds.shape[0], c1_ds.shape[0], c2_ds.shape[0], phi_ds.shape[0])
+            if score_ds is not None:
+                num_frames = min(num_frames, score_ds.shape[0])
+        else:
+            # Derive from fields only; include current if present
+            num_frames = min(c1_ds.shape[0], c2_ds.shape[0], phi_ds.shape[0])
+            if curr_ds is not None:
+                num_frames = min(num_frames, curr_ds.shape[0])
 
         # Determine slice window [start_idx:end_idx)
         if not (0.0 <= start_frac <= 1.0) or not (0.0 <= until_frac <= 1.0):
@@ -348,33 +362,40 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
         if indices.size == 0:
             raise ValueError("No frames selected after applying --from/--until and --step")
 
-        # Initialize pygame and the game renderer
-        pygame.init()
-        # If video mode, create a hidden window to avoid showing realtime gameplay
-        if 'video' in locals() and video:
-            try:
-                screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), flags=pygame.HIDDEN)
-            except Exception:
-                # Fallback: normal window if HIDDEN not supported
+        # Initialize pygame and the game renderer (unless --no-game)
+        if not no_game:
+            pygame.init()
+            # If video mode, create a hidden window to avoid showing realtime gameplay
+            if 'video' in locals() and video:
+                try:
+                    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), flags=pygame.HIDDEN)
+                except Exception:
+                    # Fallback: normal window if HIDDEN not supported
+                    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+            else:
                 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-        else:
-            screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-        pygame.display.set_caption("Pong Replay")
-        clock = pygame.time.Clock()
+            pygame.display.set_caption("Pong Replay")
+            clock = pygame.time.Clock()
 
-        # logging=False to avoid CSV side effects during replay
-        game = PongGame(SCREEN_WIDTH, SCREEN_HEIGHT, logging=False)
-        # Score handling: prefer stored score; fallback only for older files
-        pygame.font.init()  # PongGame handles its own font rendering
-        if score_ds is None:
-            score = 0
-            # For robust detection, precompute center equals for all frames
-            try:
-                all_ball = ball_ds[...]
-                center_frames = (all_ball == all_ball[0]).all(axis=1)
-            except Exception:
+            # logging=False to avoid CSV side effects during replay
+            game = PongGame(SCREEN_WIDTH, SCREEN_HEIGHT, logging=False)
+            # Score handling: prefer stored score; fallback only for older files
+            pygame.font.init()  # PongGame handles its own font rendering
+            if score_ds is None:
+                score = 0
+                # For robust detection, precompute center equals for all frames
+                try:
+                    all_ball = ball_ds[...]
+                    center_frames = (all_ball == all_ball[0]).all(axis=1)
+                except Exception:
+                    center_frames = None
+            else:
+                score = None
                 center_frames = None
         else:
+            screen = None
+            clock = None
+            game = None
             score = None
             center_frames = None
 
@@ -467,7 +488,7 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 return 1e9, 'ns'
             t_scale, t_unit = _time_scale_from_flag(time_scale, dt)
 
-            # For video we create a 2x2 layout: gameplay + three fields
+            # For video we create a layout for fields (and game unless --no-game)
             if video:
                 # Use non-interactive backend to avoid opening windows
                 try:
@@ -479,18 +500,33 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                     shutil.rmtree(frame_dir)
                 os.makedirs(frame_dir, exist_ok=True)
 
-                fig = plt.figure(figsize=(16, 12))
-                gs = fig.add_gridspec(2, 2)
-                ax_game = fig.add_subplot(gs[0, 0])
-                if is_npen:
-                    # In NPEN, show current plot in place of the redundant c2 panel
-                    ax_cur = fig.add_subplot(gs[0, 1])
-                    ax_c2 = fig.add_subplot(gs[1, 0])  # single concentration 'c'
-                    ax_phi = fig.add_subplot(gs[1, 1])
+                if not no_game:
+                    fig = plt.figure(figsize=(16, 12))
+                    gs = fig.add_gridspec(2, 2)
+                    ax_game = fig.add_subplot(gs[0, 0])
+                    if is_npen:
+                        # In NPEN, show current plot in place of the redundant c2 panel
+                        ax_cur = fig.add_subplot(gs[0, 1])
+                        ax_c2 = fig.add_subplot(gs[1, 0])  # single concentration 'c'
+                        ax_phi = fig.add_subplot(gs[1, 1])
+                    else:
+                        ax_c2 = fig.add_subplot(gs[0, 1])
+                        ax_c1 = fig.add_subplot(gs[1, 0])
+                        ax_phi = fig.add_subplot(gs[1, 1])
                 else:
-                    ax_c2 = fig.add_subplot(gs[0, 1])
-                    ax_c1 = fig.add_subplot(gs[1, 0])
-                    ax_phi = fig.add_subplot(gs[1, 1])
+                    # No game panel: lay out only field panels (and optional current for NPEN)
+                    if is_npen:
+                        fig = plt.figure(figsize=(18, 6))
+                        gs = fig.add_gridspec(1, 3)
+                        ax_c2 = fig.add_subplot(gs[0, 0])  # 'c'
+                        ax_phi = fig.add_subplot(gs[0, 1])
+                        ax_cur = fig.add_subplot(gs[0, 2])
+                    else:
+                        fig = plt.figure(figsize=(18, 6))
+                        gs = fig.add_gridspec(1, 3)
+                        ax_c2 = fig.add_subplot(gs[0, 0])
+                        ax_c1 = fig.add_subplot(gs[0, 1])
+                        ax_phi = fig.add_subplot(gs[0, 2])
             else:
                 plt.ion()
                 if is_npen:
@@ -579,7 +615,7 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                     pass
 
             # For video: add an AxesImage for the gameplay frame in ax_game
-            if video:
+            if video and (not no_game):
                 import pygame.surfarray as surfarray
                 frame_rgb = np.transpose(surfarray.array3d(screen), (1, 0, 2))
                 img_game = ax_game.imshow(frame_rgb)
@@ -591,6 +627,7 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
             vid_cur_line = None
             vid_cur_scatter = None
             vid_cur_text = None
+            vid_cur_vline = None
             vid_x_poly = None
             vid_x_nodes = None
             if video and is_npen:
@@ -609,6 +646,7 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                     vid_cur_text = vid_cur_ax.text(0.02, 0.98, '', transform=vid_cur_ax.transAxes, 
                                                  verticalalignment='top', fontsize=10, 
                                                  bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+                    vid_cur_vline = vid_cur_ax.axvline(x=np.nan, color='r', linestyle='--', label='x_max')
                     vid_cur_ax.legend(loc='upper right')
                 except Exception:
                     pass
@@ -623,6 +661,7 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
         cur_line = None
         cur_scatter = None
         cur_text = None
+        cur_vline = None
         x_poly = None
         x_nodes = None
         if show_current and not video:
@@ -642,9 +681,42 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
             cur_text = cur_ax.text(0.02, 0.98, '', transform=cur_ax.transAxes, 
                                  verticalalignment='top', fontsize=10, 
                                  bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            cur_vline = cur_ax.axvline(x=np.nan, color='r', linestyle='--', label='x_max')
             cur_ax.set_xlim(0, 2 * h_third)
             cur_ax.set_ylim(0, 1.1)
             cur_ax.legend(loc='upper right')
+
+            
+        # Optional: separate live window for RAW current polynomial visualization (not recorded in video)
+        # Uses raw signed currents (I1, I2, I3) without normalization or abs()
+        raw_fig = None
+        raw_ax = None
+        raw_line = None
+        raw_scatter = None
+        raw_text = None
+        raw_vline = None
+        raw_x_poly = None
+        raw_x_nodes = None
+        if show_current_raw and not video:
+            try:
+                plt.ion()
+            except Exception:
+                pass
+            raw_fig, raw_ax = plt.subplots(1, 1, figsize=(7, 4), constrained_layout=True)
+            raw_ax.set_title("Current-based quadratic (raw I)")
+            raw_ax.set_xlabel("y position (pixels)")
+            raw_ax.set_ylabel("Current (raw)")
+            h_third = SCREEN_HEIGHT // 3
+            raw_x_nodes = np.array([0, h_third, 2 * h_third], dtype=float)
+            raw_x_poly = np.linspace(0.0, 2.0 * h_third, int(2 * h_third) + 1)
+            raw_line, = raw_ax.plot([], [], 'b-', lw=2, label='quadratic fit')
+            raw_scatter = raw_ax.scatter([], [], c='r', s=40, zorder=5, label='measurements')
+            raw_text = raw_ax.text(0.02, 0.98, '', transform=raw_ax.transAxes,
+                                   verticalalignment='top', fontsize=10,
+                                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            raw_ax.set_xlim(0, 2 * h_third)
+            raw_vline = raw_ax.axvline(x=np.nan, color='r', linestyle='--', label='x_max')
+            raw_ax.legend(loc='upper right')
 
         running = True
         # local frame counter over selected indices
@@ -653,50 +725,52 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
         total_in_window = int(indices.size)
         while running and t < total_in_window:
             # Handle minimal events to keep window responsive and allow quit
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_q:
+            if not no_game:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
                         running = False
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_q:
+                            running = False
 
             
 
             # Global index within full arrays (respecting step)
             g = int(indices[t])
-            # Apply recorded positions for this frame
-            bx, by = ball_ds[g]
-            py = plat_ds[g]
+            if not no_game:
+                # Apply recorded positions for this frame
+                bx, by = ball_ds[g]
+                py = plat_ds[g]
 
-            # Update game object's state directly (no physics step)
-            game.ball.x = int(bx)
-            game.ball.y = int(by)
-            game.set_platform_position(int(py))
+                # Update game object's state directly (no physics step)
+                game.ball.x = int(bx)
+                game.ball.y = int(by)
+                game.set_platform_position(int(py))
 
-            # Update score from HDF5 if available; else fallback to heuristic
-            if score_ds is not None:
-                try:
-                    game.score = int(score_ds[g])
-                except Exception:
-                    pass
-            else:
-                # Detect round restart and update score
-                is_center = False
-                if center_frames is not None:
-                    is_center = bool(center_frames[g])
+                # Update score from HDF5 if available; else fallback to heuristic
+                if score_ds is not None:
+                    try:
+                        game.score = int(score_ds[g])
+                    except Exception:
+                        pass
                 else:
-                    init_bx, init_by = ball_ds[0]
-                    is_center = (bx == init_bx) and (by == init_by) and (t != 0)
-                if is_center and (t > 0) and (not prev_center):
-                    score += 1
-                    game.score = int(score)
-                prev_center = is_center
+                    # Detect round restart and update score
+                    is_center = False
+                    if center_frames is not None:
+                        is_center = bool(center_frames[g])
+                    else:
+                        init_bx, init_by = ball_ds[0]
+                        is_center = (bx == init_bx) and (by == init_by) and (t != 0)
+                    if is_center and (t > 0) and (not prev_center):
+                        score += 1
+                        game.score = int(score)
+                    prev_center = is_center
 
-            # Draw current frame; PongGame draws centered score at the top
-            game.draw(screen)
-            pygame.display.flip()
+                # Draw current frame; PongGame draws centered score at the top
+                game.draw(screen)
+                pygame.display.flip()
 
-            clock.tick(fps)
+                clock.tick(fps)
             t += 1
 
             # Update plots (and frames if video)
@@ -760,12 +834,26 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                                     y_nodes = np.array([norm[0], norm[1], norm[2]], dtype=float)
                                     a, b, c = np.polyfit(vid_x_nodes, y_nodes, 2)
                                     y_poly = a * vid_x_poly ** 2 + b * vid_x_poly + c
+                                    # Determine x position of maximum and update vline
+                                    try:
+                                        x_max_idx = int(np.nanargmax(y_poly))
+                                        x_max = float(vid_x_poly[x_max_idx]) if np.isfinite(vid_x_poly[x_max_idx]) else np.nan
+                                    except Exception:
+                                        x_max = np.nan
                                     if vid_cur_line is not None:
                                         vid_cur_line.set_data(vid_x_poly, y_poly)
                                     if vid_cur_scatter is not None:
                                         vid_cur_scatter.set_offsets(np.column_stack([vid_x_nodes, y_nodes]))
                                     if vid_cur_text is not None:
-                                        vid_cur_text.set_text(f"Σ|I| = {denom:.3e}")
+                                        if np.isfinite(x_max):
+                                            vid_cur_text.set_text(f"Σ|I| = {denom:.3e}\nx_max = {x_max:.1f}")
+                                        else:
+                                            vid_cur_text.set_text(f"Σ|I| = {denom:.3e}")
+                                    if vid_cur_vline is not None:
+                                        if np.isfinite(x_max):
+                                            vid_cur_vline.set_xdata([x_max, x_max])
+                                        else:
+                                            vid_cur_vline.set_xdata([np.nan, np.nan])
                                     vid_cur_ax.set_title(f"Current-based quadratic @ t = {t_disp:.2f} {t_unit}")
                                 else:
                                     if vid_cur_line is not None:
@@ -774,6 +862,8 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                                         vid_cur_scatter.set_offsets(np.empty((0, 2)))
                                     if vid_cur_text is not None:
                                         vid_cur_text.set_text("")
+                                    if vid_cur_vline is not None:
+                                        vid_cur_vline.set_xdata([np.nan, np.nan])
                             else:
                                 if vid_cur_line is not None:
                                     vid_cur_line.set_data([], [])
@@ -781,13 +871,16 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                                     vid_cur_scatter.set_offsets(np.empty((0, 2)))
                                 if vid_cur_text is not None:
                                     vid_cur_text.set_text("")
+                                if vid_cur_vline is not None:
+                                    vid_cur_vline.set_xdata([np.nan, np.nan])
                         except Exception:
                             pass
 
                     if video:
-                        import pygame.surfarray as surfarray
-                        frame_rgb = np.transpose(surfarray.array3d(screen), (1, 0, 2))
-                        img_game.set_data(frame_rgb)
+                        if not no_game:
+                            import pygame.surfarray as surfarray
+                            frame_rgb = np.transpose(surfarray.array3d(screen), (1, 0, 2))
+                            img_game.set_data(frame_rgb)
                         fig.canvas.draw()
                         frame_no = max(0, t - 1)
                         fig.savefig(os.path.join(frame_dir, f"frame_{frame_no:04d}.png"), dpi=dpi, bbox_inches='tight', pad_inches=0.1)
@@ -816,8 +909,22 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                                 cur_line.set_data(x_poly, y_poly)
                             if cur_scatter is not None:
                                 cur_scatter.set_offsets(np.column_stack([x_nodes, y_nodes]))
+                            # Determine x_max and update vline/text
+                            try:
+                                x_max_idx = int(np.nanargmax(y_poly))
+                                x_max = float(x_poly[x_max_idx]) if np.isfinite(x_poly[x_max_idx]) else np.nan
+                            except Exception:
+                                x_max = np.nan
                             if cur_text is not None:
-                                cur_text.set_text(f"Σ|I| = {denom:.3e}")
+                                if np.isfinite(x_max):
+                                    cur_text.set_text(f"Σ|I| = {denom:.3e}\nx_max = {x_max:.1f}")
+                                else:
+                                    cur_text.set_text(f"Σ|I| = {denom:.3e}")
+                            if cur_vline is not None:
+                                if np.isfinite(x_max):
+                                    cur_vline.set_xdata([x_max, x_max])
+                                else:
+                                    cur_vline.set_xdata([np.nan, np.nan])
                             if cur_ax is not None:
                                 cur_ax.set_title(f"Current-based quadratic (t={g})")
                             if cur_fig is not None:
@@ -831,6 +938,8 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                                 cur_scatter.set_offsets(np.empty((0, 2)))
                             if cur_text is not None:
                                 cur_text.set_text("")
+                            if cur_vline is not None:
+                                cur_vline.set_xdata([np.nan, np.nan])
                             if cur_fig is not None:
                                 cur_fig.canvas.draw_idle()
                                 plt.pause(0.001)
@@ -842,17 +951,102 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                             cur_scatter.set_offsets(np.empty((0, 2)))
                         if cur_text is not None:
                             cur_text.set_text("")
+                        if cur_vline is not None:
+                            cur_vline.set_xdata([np.nan, np.nan])
                         if cur_fig is not None:
                             cur_fig.canvas.draw_idle()
                             plt.pause(0.001)
                 except Exception:
                     pass
 
+            # Update RAW current polynomial window (if enabled)
+            if show_current_raw and not video and (curr_ds is not None):
+                try:
+                    curr_vals = np.array(curr_ds[g], dtype=float)
+                    if curr_vals.shape[0] >= 3 and np.all(np.isfinite(curr_vals)):
+                        y_nodes = np.array(curr_vals[:3], dtype=float)
+                        # Quadratic through the three anchor points (0, H/3, 2H/3)
+                        a, b, c = np.polyfit(raw_x_nodes, y_nodes, 2)
+                        y_poly = a * raw_x_poly ** 2 + b * raw_x_poly + c
+                        # Apply updates
+                        if raw_line is not None:
+                            raw_line.set_data(raw_x_poly, y_poly)
+                        if raw_scatter is not None:
+                            raw_scatter.set_offsets(np.column_stack([raw_x_nodes, y_nodes]))
+                        # Determine x_max and update vline/text
+                        try:
+                            x_max_idx = int(np.nanargmax(y_poly))
+                            x_max = float(raw_x_poly[x_max_idx]) if np.isfinite(raw_x_poly[x_max_idx]) else np.nan
+                        except Exception:
+                            x_max = np.nan
+                        if raw_text is not None:
+                            if np.isfinite(x_max):
+                                raw_text.set_text(
+                                    f"I = [{y_nodes[0]:.3e}, {y_nodes[1]:.3e}, {y_nodes[2]:.3e}]\nx_max = {x_max:.1f}"
+                                )
+                            else:
+                                raw_text.set_text(
+                                    f"I = [{y_nodes[0]:.3e}, {y_nodes[1]:.3e}, {y_nodes[2]:.3e}]"
+                                )
+                        if raw_vline is not None:
+                            if np.isfinite(x_max):
+                                raw_vline.set_xdata([x_max, x_max])
+                            else:
+                                raw_vline.set_xdata([np.nan, np.nan])
+                        if raw_ax is not None:
+                            raw_ax.set_title(f"Current-based quadratic (raw, t={g})")
+                            # Dynamic y-scaling to emphasize differences (not centered on 0)
+                            try:
+                                both = np.concatenate([y_nodes.ravel(), y_poly.ravel()])
+                                both = both[np.isfinite(both)]
+                                if both.size:
+                                    y_min = float(np.min(both))
+                                    y_max = float(np.max(both))
+                                else:
+                                    y_min = y_max = 0.0
+                            except Exception:
+                                y_min = y_max = 0.0
+                            if not np.isfinite(y_min) or not np.isfinite(y_max):
+                                y_min, y_max = -1.0, 1.0
+                            span = y_max - y_min
+                            if span <= 0 or not np.isfinite(span):
+                                # All values equal or invalid, create a small window around the value/zero
+                                center = y_min
+                                half = 1.0 if not np.isfinite(center) else max(1e-12, abs(center) * 0.1)
+                                y_min, y_max = center - half, center + half
+                            else:
+                                pad = 0.1 * span
+                                y_min -= pad
+                                y_max += pad
+                            raw_ax.set_ylim(y_min, y_max)
+                        if raw_fig is not None:
+                            raw_fig.canvas.draw_idle()
+                            plt.pause(0.001)
+                    else:
+                        # Clear when invalid
+                        if raw_line is not None:
+                            raw_line.set_data([], [])
+                        if raw_scatter is not None:
+                            raw_scatter.set_offsets(np.empty((0, 2)))
+                        if raw_text is not None:
+                            raw_text.set_text("")
+                        if raw_vline is not None:
+                            raw_vline.set_xdata([np.nan, np.nan])
+                        if raw_fig is not None:
+                            raw_fig.canvas.draw_idle()
+                            plt.pause(0.001)
+                except Exception:
+                    pass
+
             # small delay to make replay viewable (skip extra delay when rendering video)
             if not video:
-                time.sleep(0.01)
+                if no_game:
+                    time.sleep(max(0.0, 1.0 / max(1, fps)))
+                else:
+                    time.sleep(0.01)
 
-        pygame.quit()
+        if not no_game:
+            pygame.quit()
 
         if show_fields and not video:
             try:
@@ -862,6 +1056,13 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 pass
 
         if show_current and not video:
+            try:
+                plt.ioff()
+                plt.show(block=False)
+            except Exception:
+                pass
+
+        if show_current_raw and not video:
             try:
                 plt.ioff()
                 plt.show(block=False)
@@ -916,6 +1117,9 @@ def main():
                           ))
     parser.add_argument("--current", action="store_true",
                          help="Show an extra window plotting the current-based quadratic used for paddle position (marks at x=0,200,400)")
+    parser.add_argument("--current-raw", action="store_true",
+                         help="Like --current but uses raw signed currents without normalization or abs")
+    parser.add_argument("--no-game", action="store_true", help="Do not use or require game datasets; visualize fields only (for stimulation-only runs)")
     parser.add_argument("--metadata", action="store_true", help="Print metadata summary from the HDF5 file")
     args = parser.parse_args()
 
@@ -923,12 +1127,23 @@ def main():
         # Quick info printout about the selected window
         ReaderInfo = PongH5ReaderNPEN if args.npen and (PongH5ReaderNPEN is not None) else PongH5ReaderNPP
         with ReaderInfo(args.h5) as _data:
-            if args.npen and hasattr(_data, 'c'):
-                _T = int(min(_data.ball_pos.shape[0], _data.platform_pos.shape[0],
-                             _data.c.shape[0], _data.c.shape[0], _data.phi.shape[0]))
+            if args.no_game:
+                # Derive T from fields only; include current if present
+                if args.npen and hasattr(_data, 'c'):
+                    _T = int(min(_data.c.shape[0], _data.c.shape[0], _data.phi.shape[0]))
+                else:
+                    _T = int(min(_data.c1.shape[0], _data.c2.shape[0], _data.phi.shape[0]))
+                try:
+                    _T = int(min(_T, _data.measured_current.shape[0]))
+                except Exception:
+                    pass
             else:
-                _T = int(min(_data.ball_pos.shape[0], _data.platform_pos.shape[0],
-                             _data.c1.shape[0], _data.c2.shape[0], _data.phi.shape[0]))
+                if args.npen and hasattr(_data, 'c'):
+                    _T = int(min(_data.ball_pos.shape[0], _data.platform_pos.shape[0],
+                                 _data.c.shape[0], _data.c.shape[0], _data.phi.shape[0]))
+                else:
+                    _T = int(min(_data.ball_pos.shape[0], _data.platform_pos.shape[0],
+                                 _data.c1.shape[0], _data.c2.shape[0], _data.phi.shape[0]))
         s_idx = int(np.floor(max(0.0, min(1.0, args.start_frac)) * _T))
         e_idx = int(np.ceil(max(0.0, min(1.0, args.until_frac)) * _T))
         print(f"Dataset length (timesteps): {_T}")
@@ -956,6 +1171,8 @@ def main():
             change=args.change,
             time_scale=args.ts,
             show_current=args.current,
+            show_current_raw=args.current_raw,
+            no_game=args.no_game,
         )
     except Exception as e:
         print(f"Error during replay: {e}", file=sys.stderr)

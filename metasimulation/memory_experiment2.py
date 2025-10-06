@@ -85,98 +85,79 @@ def build_temporal_voltages(sim: MemoryElectrodes,
                             idle: int,
                             voltage: int,
                             amplitude: float,
-                            targets: Sequence[int] | str) -> List[TemporalVoltage]:
-    """Construct TemporalVoltage objects for selected stimulating PAIRS.
+                            target_sequence) -> List[TemporalVoltage]:
+    """Construct TemporalVoltage objects from a block-wise target sequence.
 
-    - sim.voltage_indices[6:] gives the 12 stimulating node indices, grouped as 6 pairs.
-    - `targets` supports two modes:
-        1) Static set: 'all' or a list of PAIR indices in [0..5] => all selected pairs are active in every cycle (V,0 during voltage, idle otherwise).
-        2) Sequence per cycle: a list whose elements can be ints in [0..5] or 'nan'/None/np.nan. Each entry selects the active pair for that cycle,
-           or idle if nan-like. Example: [1, 2, np.nan] => first cycle pair 1 active, second cycle pair 2 active, third cycle idle.
-      Non-targeted pairs are omitted (interpreted as NaN by run()).
+    Semantics:
+    - target_sequence is a list of blocks. Each block lasts `voltage` steps.
+    - Between blocks, insert `idle` steps where all stimulating electrodes are idle (NaN).
+    - A block can be:
+        * int p in [0..5]: activate pair p for this block
+        * list/tuple of ints: activate all listed pairs simultaneously for this block
+        * np.nan/None/"idle": idle block (no activation)
+    - After the last block, any remaining steps up to `total` remain idle (NaN), effectively padding the timeline.
     """
     stim_nodes = list(sim.voltage_indices[6:])
     if len(stim_nodes) != 12:
         raise ValueError(f"Expected 12 stimulating nodes, got {len(stim_nodes)}")
 
-    # Helper to detect nan-like entries
     def _is_nan_like(v):
         if v is None:
             return True
-        if isinstance(v, str) and v.strip().lower() in {"nan", "idle"}:
+        if isinstance(v, str) and v.strip().lower() in {"nan", "idle", "none"}:
             return True
         try:
             return bool(np.isnan(v))
         except Exception:
             return False
 
-    cycle = idle + voltage
-    cycles = total // cycle if cycle > 0 else 0
+    # Normalize target_sequence to list[ list[int] | None ]
+    blocks: List[List[int] | None] = []
+    if isinstance(target_sequence, str) and target_sequence.strip().lower() == 'all':
+        blocks = [list(range(6))]
+    elif isinstance(target_sequence, (list, tuple, np.ndarray)):
+        for entry in target_sequence:
+            if _is_nan_like(entry):
+                blocks.append(None)
+            elif isinstance(entry, (list, tuple, np.ndarray)):
+                pairs: List[int] = []
+                for p in entry:
+                    try:
+                        pi = int(p)
+                    except Exception:
+                        continue
+                    if 0 <= pi < 6:
+                        pairs.append(pi)
+                blocks.append(sorted(set(pairs)) if pairs else None)
+            else:
+                try:
+                    pi = int(entry)
+                except Exception:
+                    pi = None
+                blocks.append([pi] if (pi is not None and 0 <= pi < 6) else None)
+    else:
+        raise ValueError("target_sequence must be 'all' or a list of blocks (ints/lists or NaN)")
 
-    # Sequence mode if targets contains any nan-like or non-int entries
-    sequence_mode = False
-    if isinstance(targets, (list, tuple)):
-        for _v in targets:
-            if _is_nan_like(_v) or not isinstance(_v, (int, np.integer)):
-                sequence_mode = True
-                break
-
-    tv_list: List[TemporalVoltage] = []
-    if targets == 'all' and not sequence_mode:
-        # Static: all pairs active during every voltage window
-        base_seq = build_repeating_sequence(total, idle, voltage, amplitude)
-        active_mask = ~np.isnan(base_seq)
-        pair_zero_seq = np.where(active_mask, 0.0, np.nan).astype(float)
-        for p in range(6):
-            left_node = int(stim_nodes[2 * p])
-            right_node = int(stim_nodes[2 * p + 1])
-            tv_list.append(TemporalVoltage(left_node, base_seq.copy()))
-            tv_list.append(TemporalVoltage(right_node, pair_zero_seq.copy()))
-        return tv_list
-
-    if not sequence_mode:
-        # Static: explicit subset of pairs active in every voltage window
-        pair_indices = list(targets) if isinstance(targets, (list, tuple)) else [int(targets)]
-        for p in pair_indices:
-            if p < 0 or p >= 6:
-                raise ValueError("target PAIR indices must be in [0..5]")
-        base_seq = build_repeating_sequence(total, idle, voltage, amplitude)
-        active_mask = ~np.isnan(base_seq)
-        pair_zero_seq = np.where(active_mask, 0.0, np.nan).astype(float)
-        for p in pair_indices:
-            left_node = int(stim_nodes[2 * p])
-            right_node = int(stim_nodes[2 * p + 1])
-            tv_list.append(TemporalVoltage(left_node, base_seq.copy()))
-            tv_list.append(TemporalVoltage(right_node, pair_zero_seq.copy()))
-        return tv_list
-
-    # Sequence mode: per-cycle pair selection or idle
-    # Build blank sequences for all 6 pairs (omit later if always NaN)
+    # Prepare per-pair time sequences (NaN = idle/no Dirichlet)
     pair_left = [np.full(total, np.nan, dtype=float) for _ in range(6)]
     pair_right = [np.full(total, np.nan, dtype=float) for _ in range(6)]
 
-    for ci in range(cycles):
-        sel = None
-        if isinstance(targets, (list, tuple)) and ci < len(targets):
-            sel = targets[ci]
-        # Normalize selection
-        if _is_nan_like(sel):
-            continue  # idle this cycle
-        try:
-            p = int(sel)
-        except Exception:
-            continue
-        if p < 0 or p >= 6:
-            continue
-        # Voltage window for this cycle
-        start = ci * cycle + idle
-        end = min(start + voltage, total)
-        if start >= total or start >= end:
-            continue
-        pair_left[p][start:end] = float(amplitude)
-        pair_right[p][start:end] = 0.0
+    t = 0
+    for bi, block in enumerate(blocks):
+        # Apply active window for this block
+        start = t
+        end = min(start + max(int(voltage), 0), total)
+        if block is not None and start < end:
+            for p in block:
+                pair_left[p][start:end] = float(amplitude)
+                pair_right[p][start:end] = 0.0
+        t = end
+        # Insert idle gap between blocks (except after last)
+        if bi < len(blocks) - 1 and idle > 0 and t < total:
+            t = min(t + int(idle), total)
 
-    # Emit only pairs that are ever active (non-all-NaN)
+    # Build TemporalVoltage list for pairs that were ever active
+    tv_list: List[TemporalVoltage] = []
     for p in range(6):
         if not np.all(np.isnan(pair_left[p])):
             left_node = int(stim_nodes[2 * p])
@@ -198,6 +179,7 @@ def memory_experiment_loop(
     applied_voltage: float,
     size_list: Sequence[tuple[int, int, int]],
     k_reaction: float,
+    L_c_list: Sequence[float],
     outdir: str,
     sleep_between_runs: float = 0.0,
     experiment_list: Sequence[str] | None = None,
@@ -211,51 +193,49 @@ def memory_experiment_loop(
         dt_list,
         checkpoints, idle_steps_list, voltage_steps_list, total_steps_list,
         amplitude_list, targets_list,
-        size_list,
+        size_list, L_c_list,
         exps,
     ))
     if not combos:
         raise ValueError("No experiment combinations provided")
 
-    for (dt,checkpoint, idle_steps, voltage_steps, total_steps, amplitude, targets, size, experiment) in combos:
+    for (dt,checkpoint, idle_steps, voltage_steps, total_steps, amplitude, target_seq, size, L_c, experiment) in combos:
         ts_human = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[memory] {ts_human} -> Run: idle={idle_steps}, voltage={voltage_steps}, total={total_steps}, amp={amplitude}, targets={targets}, exp={experiment}, checkpoint={checkpoint}")
+        print(f"[memory] {ts_human} -> Run: idle={idle_steps}, voltage={voltage_steps}, total={total_steps}, amp={amplitude}, target_sequence={target_seq}, L_c={L_c}, exp={experiment}, checkpoint={checkpoint}")
 
         # Create runner
-        sim = MemoryElectrodes(dt=dt, applied_voltage=applied_voltage, nx=size[0], ny=size[1], nz=size[2], experiment=experiment)
+        sim = MemoryElectrodes(dt=dt,L_c=L_c, applied_voltage=applied_voltage, nx=size[0], ny=size[1], nz=size[2], experiment=experiment)
 
-        # Build per-electrode sequences
-        print(targets)
-        stim = build_temporal_voltages(sim, total_steps, idle_steps, voltage_steps, amplitude, targets)
+        # Build stimulation sequences from block-wise target sequence
+        stim = build_temporal_voltages(sim, total_steps, idle_steps, voltage_steps, amplitude, target_seq)
 
-
-
-
-        # Build output path
-        # Robust target tag: handle per-cycle sequences with NaN/idle entries
-        if targets == 'all':
-            target_tag = 'all'
-        else:
-            seq = targets if isinstance(targets, (list, tuple, np.ndarray)) else [targets]
-            parts = []
-            for x in seq:
-                if isinstance(x, str) and x.strip().lower() in {"nan", "idle"}:
-                    parts.append("id")
-                    continue
-                try:
-                    if np.isnan(x):
-                        parts.append("id")
+        # Target tag for filename
+        def _blk_to_str(b):
+            if b is None:
+                return "id"
+            if isinstance(b, (list, tuple, np.ndarray)):
+                parts = []
+                for x in b:
+                    try:
+                        parts.append(str(int(x)))
+                    except Exception:
                         continue
-                except Exception:
-                    pass
-                try:
-                    parts.append(str(int(x)))
-                except Exception:
-                    parts.append("id")
-            target_tag = "t" + ",".join(parts)
+                return "+".join(parts) if parts else "id"
+            try:
+                return "id" if (isinstance(b, float) and np.isnan(b)) else str(int(b))
+            except Exception:
+                return "id"
+        if isinstance(target_seq, (list, tuple, np.ndarray)):
+            blocks_desc = [_blk_to_str(b) for b in target_seq]
+            target_tag = "blk(" + ";".join(blocks_desc) + ")"
+        elif isinstance(target_seq, str) and target_seq.strip().lower() == "all":
+            target_tag = "blk(all)"
+        else:
+            target_tag = "blk(?)"
+
         cp_tag = os.path.basename(checkpoint) if checkpoint else 'nocp'
         base_name = (
-            f"mem_idle{idle_steps}_volt{voltage_steps}_tot{total_steps}_amp{str(amplitude).replace('.', 'p')}_exp{experiment}_{target_tag}_{cp_tag}"
+            f"mem_idle{idle_steps}_volt{voltage_steps}_tot{total_steps}_amp{str(amplitude).replace('.', 'p')}_Lc{str(L_c).replace('.', 'p')}_exp{experiment}_{target_tag}_{dt}_{cp_tag}"
         )
         ts_ns = time.time_ns()
         out_path = os.path.join(outdir, f"{base_name}_{ts_ns}.h5")
@@ -283,22 +263,24 @@ def memory_experiment_loop(
 
 
 def main():
-    # Run memory experiment
+    
+    
+
     memory_experiment_loop(
         checkpoints=[None],
-        idle_steps_list=[50,200,100,300],
-        voltage_steps_list=[50,40,160,320,640],
-        total_steps_list=[400],
+        idle_steps_list=[50],
+        voltage_steps_list=[50],
+        total_steps_list=[300],
         amplitude_list=[1.0],
-        targets_list=[[1,2]],
+        targets_list=[[[0], [1], [0]]],
         measuring_voltage=2.0,
-        dt_list=[0.0001],
-        L_c_list=[1e-2],
+        dt_list=[0.001],
+        L_c_list=[1e-3],
         applied_voltage=20.0,
-        size_list=[(32,32,8)],
+        size_list=[(16, 16, 8)],
         k_reaction=0.0,
         outdir="metasimulation/output/memory",
-        sleep_between_runs=1.0,
+        sleep_between_runs=0.0,
         experiment_list=["random"],
     )
 
