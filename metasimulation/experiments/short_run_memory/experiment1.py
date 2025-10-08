@@ -1,4 +1,5 @@
 from metasimulation.memory_experiment2 import *
+import numpy as np
 
 memory_experiment_loop(
         checkpoints=[None],
