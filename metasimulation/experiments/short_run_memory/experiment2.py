@@ -3,9 +3,9 @@ import numpy as np
 
 memory_experiment_loop(
         checkpoints=[None],
-        idle_steps_list=[100],
-        voltage_steps_list=[200],
-        total_steps_list=[300],
+        idle_steps_list=[100,10],
+        voltage_steps_list=[200,400],
+        total_steps_list=[10000],
         amplitude_list=[1.0],
         targets_list=[[[1],[0], [2],[2],[1],[0],[1],[0], [2],[2],[1],[0],[1],[0], [2],[2],[1],[0],[1],[0], [2],[2],[1],[0],[1],[0], [0,1,2],[0,1,2],[0,1,2],[0,1,2],[0,1,2],[0,1,2],[0,1,2],[0,1,2],[0,1,2]]],
         measuring_voltage=2.0,
