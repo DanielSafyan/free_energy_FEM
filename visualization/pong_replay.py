@@ -9,6 +9,7 @@ import pygame
 import matplotlib.pyplot as plt
 import h5py
 import shutil
+import traceback
 
 # Reuse the game's rendering/look by importing PongGame
 from gameplay.pong_game import PongGame, SCREEN_WIDTH, SCREEN_HEIGHT
@@ -38,7 +39,7 @@ def print_h5_metadata(h5_path: str, use_npen: bool = False) -> None:
                     pass
     except Exception:
         pass
-
+    # Load time series lazily
     with Reader(h5_path) as data:
         # Basic attributes
         attrs = getattr(data, 'attrs', {})
@@ -282,6 +283,7 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 time_scale: str | None = None,
                 show_current: bool = False,
                 show_current_raw: bool = False,
+                show_current_raw_norm: bool = False,
                 no_game: bool = False):
     """
     Replay the Pong game using positions recorded in an HDF5 file.
@@ -718,6 +720,38 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
             raw_vline = raw_ax.axvline(x=np.nan, color='r', linestyle='--', label='x_max')
             raw_ax.legend(loc='upper right')
 
+        # Optional: separate live window for NORMALIZED RAW current polynomial visualization (not recorded in video)
+        # Uses raw signed currents (I1, I2, I3) normalized by sum of absolute values: I_i / Σ|I_j|
+        norm_fig = None
+        norm_ax = None
+        norm_line = None
+        norm_scatter = None
+        norm_text = None
+        norm_vline = None
+        norm_x_poly = None
+        norm_x_nodes = None
+        if show_current_raw_norm and not video:
+            try:
+                plt.ion()
+            except Exception:
+                pass
+            norm_fig, norm_ax = plt.subplots(1, 1, figsize=(7, 4), constrained_layout=True)
+            norm_ax.set_title("Current-based quadratic (normalized raw I)")
+            norm_ax.set_xlabel("y position (pixels)")
+            norm_ax.set_ylabel("Normalized current (signed)")
+            h_third = SCREEN_HEIGHT // 3
+            norm_x_nodes = np.array([0, h_third, 2 * h_third], dtype=float)
+            norm_x_poly = np.linspace(0.0, 2.0 * h_third, int(2 * h_third) + 1)
+            norm_line, = norm_ax.plot([], [], 'b-', lw=2, label='quadratic fit')
+            norm_scatter = norm_ax.scatter([], [], c='r', s=40, zorder=5, label='measurements')
+            norm_text = norm_ax.text(0.02, 0.98, '', transform=norm_ax.transAxes,
+                                     verticalalignment='top', fontsize=10,
+                                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            norm_vline = norm_ax.axvline(x=np.nan, color='r', linestyle='--', label='x_max')
+            norm_ax.set_xlim(0, 2 * h_third)
+            norm_ax.set_ylim(-1.1, 1.1)
+            norm_ax.legend(loc='upper right')
+
         running = True
         # local frame counter over selected indices
         t = 0
@@ -743,9 +777,9 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 py = plat_ds[g]
 
                 # Update game object's state directly (no physics step)
-                game.ball.x = int(bx)
-                game.ball.y = int(by)
-                game.set_platform_position(int(py))
+                game.ball.x = int(bx) if np.isfinite(bx) else game.ball.x
+                game.ball.y = int(by) if np.isfinite(by) else game.ball.y
+                game.set_platform_position(int(py) if np.isfinite(py) else game.get_platform_position())
 
                 # Update score from HDF5 if available; else fallback to heuristic
                 if score_ds is not None:
@@ -1038,12 +1072,83 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 except Exception:
                     pass
 
-            # small delay to make replay viewable (skip extra delay when rendering video)
-            if not video:
-                if no_game:
-                    time.sleep(max(0.0, 1.0 / max(1, fps)))
-                else:
-                    time.sleep(0.01)
+            # Update NORMALIZED RAW current polynomial window (if enabled)
+            if show_current_raw_norm and not video and (curr_ds is not None):
+                try:
+                    curr_vals = np.array(curr_ds[g], dtype=float)
+                    if curr_vals.shape[0] >= 3 and np.all(np.isfinite(curr_vals)):
+                        raw_vals = np.array(curr_vals[:3], dtype=float)
+                        abs_sum = float(np.sum(np.abs(raw_vals)))
+                        if abs_sum > 0.0 and np.isfinite(abs_sum):
+                            y_nodes = raw_vals / abs_sum
+                            # Quadratic through the three anchor points (0, H/3, 2H/3)
+                            a, b, c = np.polyfit(norm_x_nodes, y_nodes, 2)
+                            y_poly = a * norm_x_poly ** 2 + b * norm_x_poly + c
+                            # Apply updates
+                            if norm_line is not None:
+                                norm_line.set_data(norm_x_poly, y_poly)
+                            if norm_scatter is not None:
+                                norm_scatter.set_offsets(np.column_stack([norm_x_nodes, y_nodes]))
+                            # Determine x_max and update vline/text
+                            try:
+                                x_max_idx = int(np.nanargmax(y_poly))
+                                x_max = float(norm_x_poly[x_max_idx]) if np.isfinite(norm_x_poly[x_max_idx]) else np.nan
+                            except Exception:
+                                x_max = np.nan
+                            if norm_text is not None:
+                                if np.isfinite(x_max):
+                                    norm_text.set_text(
+                                        f"Σ|I| = {abs_sum:.3e}\nI/Σ|I| = [{y_nodes[0]:.3f}, {y_nodes[1]:.3f}, {y_nodes[2]:.3f}]\nx_max = {x_max:.1f}"
+                                    )
+                                else:
+                                    norm_text.set_text(
+                                        f"Σ|I| = {abs_sum:.3e}\nI/Σ|I| = [{y_nodes[0]:.3f}, {y_nodes[1]:.3f}, {y_nodes[2]:.3f}]"
+                                    )
+                            if norm_vline is not None:
+                                if np.isfinite(x_max):
+                                    norm_vline.set_xdata([x_max, x_max])
+                                else:
+                                    norm_vline.set_xdata([np.nan, np.nan])
+                            if norm_ax is not None:
+                                norm_ax.set_title(f"Current-based quadratic (normalized raw, t={g})")
+                            if norm_fig is not None:
+                                norm_fig.canvas.draw_idle()
+                                plt.pause(0.001)
+                        else:
+                            # Clear when invalid
+                            if norm_line is not None:
+                                norm_line.set_data([], [])
+                            if norm_scatter is not None:
+                                norm_scatter.set_offsets(np.empty((0, 2)))
+                            if norm_text is not None:
+                                norm_text.set_text("")
+                            if norm_vline is not None:
+                                norm_vline.set_xdata([np.nan, np.nan])
+                            if norm_fig is not None:
+                                norm_fig.canvas.draw_idle()
+                                plt.pause(0.001)
+                    else:
+                        # Clear when invalid
+                        if norm_line is not None:
+                            norm_line.set_data([], [])
+                        if norm_scatter is not None:
+                            norm_scatter.set_offsets(np.empty((0, 2)))
+                        if norm_text is not None:
+                            norm_text.set_text("")
+                        if norm_vline is not None:
+                            norm_vline.set_xdata([np.nan, np.nan])
+                        if norm_fig is not None:
+                            norm_fig.canvas.draw_idle()
+                            plt.pause(0.001)
+                except Exception:
+                    pass
+
+        # small delay to make replay viewable (skip extra delay when rendering video)
+        if not video:
+            if no_game:
+                time.sleep(max(0.0, 1.0 / max(1, fps)))
+            else:
+                time.sleep(0.01)
 
         if not no_game:
             pygame.quit()
@@ -1063,6 +1168,13 @@ def replay_pong(h5_path: str, fps: int = 60, show_fields: bool = True, sum_z: bo
                 pass
 
         if show_current_raw and not video:
+            try:
+                plt.ioff()
+                plt.show(block=False)
+            except Exception:
+                pass
+
+        if show_current_raw_norm and not video:
             try:
                 plt.ioff()
                 plt.show(block=False)
@@ -1119,6 +1231,8 @@ def main():
                          help="Show an extra window plotting the current-based quadratic used for paddle position (marks at x=0,200,400)")
     parser.add_argument("--current-raw", action="store_true",
                          help="Like --current but uses raw signed currents without normalization or abs")
+    parser.add_argument("--current-raw-norm", action="store_true",
+                         help="Plot normalized raw current: signed I_i divided by Σ|I_j| (preserves sign)")
     parser.add_argument("--no-game", action="store_true", help="Do not use or require game datasets; visualize fields only (for stimulation-only runs)")
     parser.add_argument("--metadata", action="store_true", help="Print metadata summary from the HDF5 file")
     args = parser.parse_args()
@@ -1172,9 +1286,11 @@ def main():
             time_scale=args.ts,
             show_current=args.current,
             show_current_raw=args.current_raw,
+            show_current_raw_norm=args.current_raw_norm,
             no_game=args.no_game,
         )
     except Exception as e:
+        traceback.print_exc()
         print(f"Error during replay: {e}", file=sys.stderr)
         sys.exit(1)
 

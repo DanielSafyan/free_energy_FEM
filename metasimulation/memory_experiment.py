@@ -292,7 +292,7 @@ def main():
         amplitude_list=[1.0],
         targets_list=[[1,2]],
         measuring_voltage=2.0,
-        dt_list=[0.0001],
+        dt_list=[0.001],
         L_c_list=[1e-2],
         applied_voltage=20.0,
         size_list=[(32,32,8)],

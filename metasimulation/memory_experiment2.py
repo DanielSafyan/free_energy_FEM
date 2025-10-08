@@ -80,12 +80,34 @@ def build_repeating_sequence(total: int, idle: int, voltage: int, amplitude: flo
     return seq
 
 
+def ramp_sequence_linearly(sequence: np.ndarray, ramp_steps: int):
+
+    sequences = np.split(sequence, np.where(np.diff(sequence) != 0)[0] + 1)
+    #print(sequences[0][:10])
+    for seq_id,seq in enumerate(sequences):
+
+        seq_ramped=[]
+        if ramp_steps == 0 or seq[0] == np.nan or len(seq) < ramp_steps:
+            seq_ramped = seq
+        else: 
+            ramp_sequence = np.linspace(0, seq[ramp_steps-1], ramp_steps)
+            deramp_sequence = np.linspace(seq[-ramp_steps-1],0,ramp_steps)
+            seq_ramped = np.concatenate([ramp_sequence, seq[ramp_steps:-ramp_steps], deramp_sequence])
+        sequences[seq_id] = seq_ramped
+    
+
+    return np.concatenate(sequences)
+    
+    
+
+
 def build_temporal_voltages(sim: MemoryElectrodes,
                             total: int,
                             idle: int,
                             voltage: int,
                             amplitude: float,
-                            target_sequence) -> List[TemporalVoltage]:
+                            target_sequence,
+                            ramp_steps: int = 0) -> List[TemporalVoltage]:
     """Construct TemporalVoltage objects from a block-wise target sequence.
 
     Semantics:
@@ -157,11 +179,19 @@ def build_temporal_voltages(sim: MemoryElectrodes,
             t = min(t + int(idle), total)
 
     # Build TemporalVoltage list for pairs that were ever active
+
+
     tv_list: List[TemporalVoltage] = []
     for p in range(6):
         if not np.all(np.isnan(pair_left[p])):
+
+
             left_node = int(stim_nodes[2 * p])
             right_node = int(stim_nodes[2 * p + 1])
+            if ramp_steps > 0:
+                pair_left[p] = ramp_sequence_linearly(pair_left[p],ramp_steps=ramp_steps)
+                pair_right[p] = ramp_sequence_linearly(pair_right[p],ramp_steps=ramp_steps)
+
             tv_list.append(TemporalVoltage(left_node, pair_left[p]))
             tv_list.append(TemporalVoltage(right_node, pair_right[p]))
     return tv_list
@@ -183,6 +213,9 @@ def memory_experiment_loop(
     outdir: str,
     sleep_between_runs: float = 0.0,
     experiment_list: Sequence[str] | None = None,
+    ramp_steps_list: Sequence[int] | None = None,
+    ramp_voltage = True,
+    make_plot = False
 ):
     os.makedirs(outdir, exist_ok=True)
 
@@ -193,13 +226,13 @@ def memory_experiment_loop(
         dt_list,
         checkpoints, idle_steps_list, voltage_steps_list, total_steps_list,
         amplitude_list, targets_list,
-        size_list, L_c_list,
+        size_list, L_c_list, ramp_steps_list,
         exps,
     ))
     if not combos:
         raise ValueError("No experiment combinations provided")
 
-    for (dt,checkpoint, idle_steps, voltage_steps, total_steps, amplitude, target_seq, size, L_c, experiment) in combos:
+    for (dt,checkpoint, idle_steps, voltage_steps, total_steps, amplitude, target_seq, size, L_c,ramp_steps, experiment) in combos:
         ts_human = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[memory] {ts_human} -> Run: idle={idle_steps}, voltage={voltage_steps}, total={total_steps}, amp={amplitude}, target_sequence={target_seq}, L_c={L_c}, exp={experiment}, checkpoint={checkpoint}")
 
@@ -207,7 +240,10 @@ def memory_experiment_loop(
         sim = MemoryElectrodes(dt=dt,L_c=L_c, applied_voltage=applied_voltage, nx=size[0], ny=size[1], nz=size[2], experiment=experiment)
 
         # Build stimulation sequences from block-wise target sequence
-        stim = build_temporal_voltages(sim, total_steps, idle_steps, voltage_steps, amplitude, target_seq)
+        if not ramp_voltage:
+            stim = build_temporal_voltages(sim, total_steps, idle_steps, voltage_steps, amplitude, target_seq)
+        else:
+            stim = build_temporal_voltages(sim, total_steps, idle_steps, voltage_steps, amplitude, target_seq, ramp_steps=ramp_steps)
 
         # Target tag for filename
         def _blk_to_str(b):
@@ -255,6 +291,13 @@ def memory_experiment_loop(
                 checkpoint=checkpoint,
             )
             print(f"[memory] Saved: {out_path}")
+
+            if make_plot:
+
+                plot_results_in_folder(idle_steps, voltage_steps, total_steps,out_path)
+                print(f"[memory] Plotted")
+
+
         except Exception as e:
             print(f"[memory] Run failed: {e}")
         finally:
@@ -262,26 +305,263 @@ def memory_experiment_loop(
                 time.sleep(sleep_between_runs)
 
 
-def main():
-    
+def plot_results_in_folder(idle_steps, voltage_steps, total_steps,out_path):
+    """Extract, plot and save results for a given NPEN memory simulation HDF5.
+
+    Creates a timestamp-named folder beside the .h5 with subfolders:
+      - current/
+      - concentration/
+      - other/
+
+    Then:
+      1) Plot measured currents over time and save under current/
+      2) Save concentration 'c' screenshots (mid-plane) at two frames per phase
+         (idle/voltage), specifically: one at (phase_start + 1) and one at
+         (phase_end - 1), clamped to [1, total_steps]. Phases repeat as
+         idle, voltage, idle, voltage, ..., with a final idle remainder.
+      3) Plot change of total concentration sum over time (Δ sum(c)) and save under other/
+    """
+
+    import os
+    import re
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    # Lazy import readers and helpers to avoid heavy module load at import time
+    from pong_simulation.pong_sim_npen import PongH5Reader
+    from visualization.pong_replay import _build_midplane_triangulation
+
+    # Ensure non-interactive backend for headless environments
+    try:
+        plt.switch_backend('Agg')
+    except Exception:
+        pass
+
+    # -----------------------------
+    # 1) Prepare output folders
+    # -----------------------------
+    base_dir = os.path.dirname(out_path)
+    stem = os.path.splitext(os.path.basename(out_path))[0]
+    # Name the folder the same as the .h5 stem (without extension)
+    out_root = os.path.join(base_dir, stem)
+    out_current = os.path.join(out_root, "current")
+    out_conc = os.path.join(out_root, "concentration")
+    out_other = os.path.join(out_root, "other")
+    os.makedirs(out_current, exist_ok=True)
+    os.makedirs(out_conc, exist_ok=True)
+    os.makedirs(out_other, exist_ok=True)
+
+    # -----------------------------
+    # 2) Read data lazily
+    # -----------------------------
+    with PongH5Reader(out_path) as data:
+        attrs = dict(data.attrs)
+        dt = float(attrs.get('dt', 0.0)) if ('dt' in attrs) else 0.0
+
+        # Time indexing: writer appends an initial state at t=0, then total_steps updates
+        # So c.shape[0] == total_steps + 1 typically
+        T_states = int(data.c.shape[0])
+        total_in_file = max(0, T_states - 1)
+        usable_total = int(min(total_steps, total_in_file)) if total_steps is not None else total_in_file
+
+        # -----------------------------
+        # 2a) Plot measured currents over time
+        # -----------------------------
+        try:
+            I_full = np.asarray(data.measured_current[...], dtype=float)  # (T,3)
+        except Exception:
+            I_full = None
+
+        if I_full is not None and I_full.ndim == 2 and I_full.shape[1] == 3:
+            T_I = I_full.shape[0]
+            # Build time vector aligned with I entries
+            if dt > 0 and np.isfinite(dt):
+                t_I = np.arange(T_I, dtype=float) * dt
+                x_label = 'time (s)'
+            else:
+                t_I = np.arange(T_I, dtype=float)
+                x_label = 'time (steps)'
+
+            good = np.isfinite(I_full).all(axis=1)
+            I = I_full[good]
+            t_I = t_I[good]
+
+            fig_cur, ax_cur = plt.subplots(1, 1, figsize=(9, 4.8))
+            # Style inspired by data_analyze.ipynb plot_currents
+            if I.size > 0:
+                l1, = ax_cur.plot(t_I, I[:, 0], label='I2', color='#1f77b4', alpha=1, linestyle='-')
+                l2, = ax_cur.plot(t_I, I[:, 1], label='I1', color='#ff7f0e', alpha=1, linestyle='-')
+                l3, = ax_cur.plot(t_I, I[:, 2], label='I0', color='#2ca02c', alpha=1, linestyle='-')
+                ax_cur.set_xlabel(x_label)
+                ax_cur.set_ylabel('Current (A)')
+                ax_cur.grid(True, alpha=0.3)
+                ax_cur.legend(loc='best')
+                ax_cur.set_title('Measurement currents')
+            fig_cur.tight_layout()
+            fig_cur.savefig(os.path.join(out_current, 'currents.png'), dpi=150)
+            plt.close(fig_cur)
+
+        # -----------------------------
+        # 2b) Prepare triangulation for concentration screenshots (mid-plane, NPEN)
+        # -----------------------------
+        nodes = np.array(data.nodes[...], dtype=float)
+        xy_mid, tri_mid, slice_idx = _build_midplane_triangulation(nodes, attrs)
+
+        def tri_face_values(field_1d: np.ndarray) -> np.ndarray:
+            """Compute per-triangle face colors by averaging node values."""
+            vals = field_1d[slice_idx]
+            return vals[tri_mid].mean(axis=1)
+
+        # Axis labels for mid-plane (XY)
+        axis_x_label, axis_y_label = "x (m)", "y (m)"
+
+        # Helper: render a single concentration frame at global index g
+        def save_c_frame(g_idx: int, out_png: str):
+            c_faces = tri_face_values(np.asarray(data.c[g_idx], dtype=float))
+            # Compute display time
+            if dt > 0 and np.isfinite(dt):
+                t_val = g_idx * dt
+                t_label = 's'
+            else:
+                t_val = g_idx
+                t_label = 'steps'
+            fig, ax = plt.subplots(1, 1, figsize=(6, 5))
+            coll = ax.tripcolor(xy_mid[:, 0], xy_mid[:, 1], tri_mid, facecolors=c_faces, cmap='plasma')
+            ax.triplot(xy_mid[:, 0], xy_mid[:, 1], tri_mid, 'k-', lw=0.1, alpha=0.3)
+            ax.set_title(f"c @ t = {t_val:.5f} {t_label}")
+            ax.set_aspect('equal')
+            ax.set_xlabel(axis_x_label)
+            ax.set_ylabel(axis_y_label)
+            fig.colorbar(coll, ax=ax, label="Concentration c")
+            fig.tight_layout()
+            fig.savefig(out_png, dpi=160)
+            plt.close(fig)
+
+        # -----------------------------
+        # 2c) Determine phases and save two screenshots per phase
+        # -----------------------------
+        # Phases begin at t=1 (after the initial state at t=0)
+        phases = []  # list of (label, start_g, end_g) inclusive, in global indices
+        tptr = 1
+        # Helper to append a phase of given length with label if length>0
+        def _add_phase(lbl: str, length: int):
+            nonlocal tptr
+            if length is None or length <= 0:
+                return
+            if tptr > usable_total:
+                return
+            start = tptr
+            end = min(tptr + int(length) - 1, usable_total)
+            if end >= start:
+                phases.append((lbl, start, end))
+            tptr = end + 1
+
+        # Repeat cycles until we fill usable_total steps. Determine first phase
+        # type from the voltage_pattern at the first update (g=1): if any of the
+        # stimulating electrode entries (last 12 of length-18 vector) are finite
+        # (including 0.0), treat as 'voltage'; if all NaN, treat as 'idle'.
+        first_is_voltage = False
+        try:
+            vp1 = np.asarray(data.voltage_pattern[1], dtype=float)
+            stim_slice = vp1[-12:] if vp1.size >= 12 else vp1
+            if stim_slice.size > 0:
+                # active if any value is finite (including zeros)
+                first_is_voltage = np.any(np.isfinite(stim_slice))
+        except Exception:
+            # Fallback to the original assumption (idle first)
+            first_is_voltage = False
+
+        idle_len = max(0, int(idle_steps))
+        volt_len = max(0, int(voltage_steps))
+        cycle = idle_len + volt_len
+        while tptr <= usable_total:
+            if first_is_voltage:
+                _add_phase('voltage', volt_len)
+                if tptr > usable_total:
+                    break
+                _add_phase('idle', idle_len)
+            else:
+                _add_phase('idle', idle_len)
+                if tptr > usable_total:
+                    break
+                _add_phase('voltage', volt_len)
+            if cycle == 0:
+                # Avoid infinite loop if both lengths are zero
+                break
+
+        # Final remainder after last complete cycle is implicitly treated as idle by _add_phase logic
+
+        # For each phase, save two frames: start and end-1 (clamped)
+        used_frames = set()
+        for k, (lbl, g_start, g_end) in enumerate(phases):
+            if g_end < g_start:
+                continue
+            # Pick indices, ensuring within [1, usable_total]
+            a = int(np.clip(g_start, 1, usable_total))
+            b = int(np.clip(g_end - 1, 1, usable_total))
+            # If very short phase, frames might collapse; still attempt unique saves
+            candidates = []
+            candidates.append(('a', a))
+            if b != a:
+                candidates.append(('b', b))
+            for tag, g in candidates:
+                key = (k, g)
+                if key in used_frames:
+                    continue
+                used_frames.add(key)
+                fname = f"phase_{k:03d}_{lbl}_t{g:05d}_{tag}.png"
+                save_c_frame(g, os.path.join(out_conc, fname))
+
+        # -----------------------------
+        # 2d) Plot absolute sum(c) over time with scaled y-axis
+        # -----------------------------
+        T = T_states
+        times = (np.arange(T, dtype=float) * dt) if (dt > 0 and np.isfinite(dt)) else np.arange(T, dtype=float)
+        # Compute sum(c) per time step lazily
+        c_sums = np.zeros(T, dtype=np.float64)
+        for t in range(T):
+            c_sums[t] = float(np.nansum(np.asarray(data.c[t], dtype=float)))
+        y_min = float(np.min(c_sums))
+        y_max = float(np.max(c_sums))
+        rng = max(1e-12, y_max - y_min)
+        margin = 0.05 * rng
+
+        fig_d, ax_d = plt.subplots(1, 1, figsize=(8, 4.5))
+        ax_d.plot(times, c_sums, label='sum(c)', color='k')
+        ax_d.set_xlabel('time (s)' if (dt > 0 and np.isfinite(dt)) else 'timestep')
+        ax_d.set_ylabel('sum over nodes')
+        ax_d.set_title('Sum of concentration over time')
+        ax_d.grid(True, alpha=0.3)
+        ax_d.set_ylim(y_min - margin, y_max + margin)
+        ax_d.legend(loc='best')
+        fig_d.tight_layout()
+        fig_d.savefig(os.path.join(out_other, 'sum_c.png'), dpi=150)
+        plt.close(fig_d)
+
+    return
+
+
+def main():  
     
 
     memory_experiment_loop(
         checkpoints=[None],
-        idle_steps_list=[50],
-        voltage_steps_list=[50],
+        idle_steps_list=[100],
+        voltage_steps_list=[200],
         total_steps_list=[300],
         amplitude_list=[1.0],
-        targets_list=[[[0], [1], [0]]],
+        targets_list=[[[0],[1],[np.nan]],[[np.nan]]],           #,[[1],[0], [2],[np.nan],[np.nan],[1],[0],[2],[2],[0],[0],[2],[2],[0],[0],[2],[2],[0],[0],[2],[2],[0],[0],[2],[2],[0],[0],[2],[2]]],
         measuring_voltage=2.0,
         dt_list=[0.001],
-        L_c_list=[1e-3],
+        L_c_list=[1e-2],
         applied_voltage=20.0,
         size_list=[(16, 16, 8)],
         k_reaction=0.0,
         outdir="metasimulation/output/memory",
         sleep_between_runs=0.0,
-        experiment_list=["random"],
+        experiment_list=["gradientz","gradientx-","gradienty-","gradientz-","gradientx","gradienty"],
+        ramp_steps_list=[20],#
+        make_plot = True,
     )
 
 
