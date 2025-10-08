@@ -263,16 +263,43 @@ def memory_experiment_loop(
                 return "id"
         if isinstance(target_seq, (list, tuple, np.ndarray)):
             blocks_desc = [_blk_to_str(b) for b in target_seq]
-            target_tag = "blk(" + ";".join(blocks_desc) + ")"
+            target_tag_full = "blk(" + ";".join(blocks_desc) + ")"
         elif isinstance(target_seq, str) and target_seq.strip().lower() == "all":
-            target_tag = "blk(all)"
+            target_tag_full = "blk(all)"
         else:
-            target_tag = "blk(?)"
+            target_tag_full = "blk(?)"
 
-        cp_tag = os.path.basename(checkpoint) if checkpoint else 'nocp'
+        # Build Windows-safe, compact base filename using inline slug helpers
+        import re as _re
+        def _slug(text: str, max_len: int) -> str:
+            s = _re.sub(r"[^A-Za-z0-9._-]+", "-", str(text)).strip("-_.")
+            if len(s) <= max_len:
+                return s
+            import hashlib as _hl
+            h = _hl.sha1(str(text).encode("utf-8")).hexdigest()[:8]
+            head = max(0, max_len - 9)
+            return (s[:head] + "-" + h) if head > 0 else h
+
+        amp_slug = _slug(str(amplitude).replace('.', 'p'), 8)
+        Lc_slug = _slug(str(L_c).replace('.', 'p'), 8)
+        exp_slug = _slug(str(experiment), 16)
+        tgt_slug = _slug(target_tag_full, 48)
+        dt_slug  = _slug(str(dt), 12)
+        if checkpoint:
+            cp_base = os.path.splitext(os.path.basename(checkpoint))[0]
+            cp_slug = _slug(cp_base, 20)
+        else:
+            cp_slug = 'nocp'
+
         base_name = (
-            f"mem_idle{idle_steps}_volt{voltage_steps}_tot{total_steps}_amp{str(amplitude).replace('.', 'p')}_Lc{str(L_c).replace('.', 'p')}_exp{experiment}_{target_tag}_{dt}_{cp_tag}"
+            f"mem_i{idle_steps}_v{voltage_steps}_t{total_steps}_amp{amp_slug}_Lc{Lc_slug}_exp{exp_slug}_tgt{tgt_slug}_dt{dt_slug}_cp{cp_slug}"
         )
+        # Ensure overall base length bound
+        if len(base_name) > 96:
+            import hashlib as _hl2
+            h = _hl2.sha1(base_name.encode('utf-8')).hexdigest()[:10]
+            base_name = base_name[:85] + "-" + h
+
         ts_ns = time.time_ns()
         out_path = os.path.join(outdir, f"{base_name}_{ts_ns}.h5")
         suffix = 1
@@ -290,6 +317,23 @@ def memory_experiment_loop(
                 output_path=out_path,
                 checkpoint=checkpoint,
             )
+            # Enrich HDF5 with full, human-readable metadata (non-fatal if it fails)
+            try:
+                import h5py as _h5
+                with _h5.File(out_path, 'a') as h5f:
+                    h5f.attrs['target_tag_full'] = str(target_tag_full)
+                    h5f.attrs['targets_list'] = str(target_seq)
+                    h5f.attrs['experiment_name'] = str(experiment)
+                    h5f.attrs['amplitude'] = float(amplitude)
+                    h5f.attrs['idle_steps'] = int(idle_steps)
+                    h5f.attrs['voltage_steps'] = int(voltage_steps)
+                    h5f.attrs['total_steps'] = int(total_steps)
+                    h5f.attrs['L_c'] = float(L_c)
+                    if checkpoint:
+                        h5f.attrs['checkpoint_basename'] = os.path.basename(checkpoint)
+            except Exception:
+                pass
+
             print(f"[memory] Saved: {out_path}")
 
             if make_plot:
