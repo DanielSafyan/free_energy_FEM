@@ -366,7 +366,7 @@ class MemoryElectrodes(PongSimulationNPEN):
             # Optional clipping to reasonable bounds
             c = np.clip(c, 1e-6, 1.0)
         elif self.experiment == "random":
-            c = 0.25 + np.random.uniform(-0.1, 0.1, self.mesh.num_nodes())
+            c = 0.5 + np.random.uniform(-0.1, 0.1, self.mesh.num_nodes())
         else:
             c = np.full(self.mesh.num_nodes(), 0.5)
         phi = np.zeros(self.mesh.num_nodes())
