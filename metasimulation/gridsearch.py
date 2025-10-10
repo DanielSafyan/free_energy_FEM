@@ -8,19 +8,21 @@ from pong_simulation.pong_sim_npen import PongSimulationNPEN, VisionImpairmentTy
 
 
 def gridsearch_loop(
-    sim_ticks_list=[5],
+    sim_ticks_list=[1],
     game_ticks_list=[1],
-    num_steps_list=[10000, 20000],
+    num_steps_list=[100],
     k_reaction_list=[0.01],
     electrode_type_list=["anode"],
     activation_list=["poly_normed"],
-    rl_list=[False],
+    rl_list=[True],
     rl_steps_list=[8],
-    dt_list=[0.001],
-    voltage_list=[20.0],
-    dt_st_pair_list=[(0.001, 1), (0.0005, 2), (0.00025, 4), (0.000125, 8)],
-    size_list=[(15,15,3)],
-    vision_impairment_type_list=[VisionImpairmentType.NONE, VisionImpairmentType.RANDOM_FULL, VisionImpairmentType.CONTINUOUS],
+    rl_type_list=["idle"],
+    ramp_steps_list=[4],
+    dt_list=[0.0001],
+    voltage_list=[2.0],
+    dt_st_pair_list=[(0.001, 1)],
+    size_list=[(16,16,4)],
+    vision_impairment_type_list=[VisionImpairmentType.NONE],
     # Optional split transport coefficients to sweep (None -> use defaults D1/D2)
     d_diff1_list=[None],
     d_mig1_list=[None],
@@ -34,7 +36,7 @@ def gridsearch_loop(
 
     combos = list(itertools.product(
         sim_ticks_list, game_ticks_list, num_steps_list, k_reaction_list,
-        electrode_type_list, activation_list, rl_list, rl_steps_list,
+        electrode_type_list, activation_list, rl_list, rl_steps_list, rl_type_list, ramp_steps_list,
         dt_list, voltage_list, size_list, dt_st_pair_list,
         vision_impairment_type_list,
         d_diff1_list, d_mig1_list, d_diff2_list, d_mig2_list,
@@ -48,7 +50,7 @@ def gridsearch_loop(
     while True:
         for (
             sim_ticks, game_ticks, num_steps, k_reaction,
-            electrode_type, activation, rl, rl_steps,
+            electrode_type, activation, rl, rl_steps, rl_type, ramp_steps,
             dt, voltage, size, dt_st_pair,
             vision_impairment_type,
             d_diff1, d_mig1, d_diff2, d_mig2,
@@ -73,7 +75,7 @@ def gridsearch_loop(
             split_tag = (", " + ", ".join(split_tag_parts)) if split_tag_parts else ""
 
             print(
-                f"[gridsearch] {ts_human} -> Run: sim_ticks={sim_ticks}, game_ticks={game_ticks}, num_steps={num_steps}, k_reaction={k_reaction}, electrode_type={electrode_type}, activation={activation}, rl={rl}, rl_steps={rl_steps}, dt={dt}, voltage={voltage}, size={size}, vision={getattr(vision_impairment_type, 'value', str(vision_impairment_type))}, checkpoint={checkpoint}{split_tag}"
+                f"[gridsearch] {ts_human} -> Run: sim_ticks={sim_ticks}, game_ticks={game_ticks}, num_steps={num_steps}, k_reaction={k_reaction}, electrode_type={electrode_type}, activation={activation}, rl={rl}, rl_steps={rl_steps}, rl_type={rl_type}, ramp_steps={ramp_steps}, dt={dt}, voltage={voltage}, size={size}, vision={getattr(vision_impairment_type, 'value', str(vision_impairment_type))}, checkpoint={checkpoint}{split_tag}"
             )
 
             # Build a unique, collision-resistant output file path
@@ -120,6 +122,8 @@ def gridsearch_loop(
                     activation=activation,
                     rl=rl,
                     rl_steps=rl_steps,
+                    rl_type=rl_type,
+                    ramp_steps=ramp_steps,
                     output_path=out_path,
                     vision_impairment_type=vision_impairment_type,
                     checkpoint=checkpoint,

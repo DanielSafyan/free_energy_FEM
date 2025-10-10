@@ -599,7 +599,7 @@ class PongSimulationNPEN:
         return c, phi
 
     def run(self, electrode_type="anode",activation = "poly_normed",rl=False,
-            rl_steps=8,sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5,
+            rl_steps=8, rl_type="idle", ramp_steps=20, sim_ticks=1, game_ticks=6, num_steps=50, k_reaction=0.5,
             output_path=None, checkpoint=None,
             vision_impairment_type: "VisionImpairmentType" = VisionImpairmentType.NONE, 
             rl_diffusion=False):
@@ -701,53 +701,77 @@ class PongSimulationNPEN:
                 if pong_game.game_over:
                     pong_game = PongGame(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, False)
                     if rl:
-                        # give chaotic signals to increase plasticity for a short time
-                        # invert voltage pattern
-                        if not rl_diffusion:
-                            voltage_pattern = [0] * 12
-                            for i in range(6): voltage_pattern[2*i] = -self.applied_voltage
-                        else:
-                            voltage_pattern = [np.nan] * 12
-                        
-                        measuring_pattern = [0, measuring_voltage, 0, measuring_voltage, 0, measuring_voltage]
-                        voltage_amount = measuring_pattern + voltage_pattern
-                        # Run RL steps entirely in core if available
-                        if hasattr(self.sim, 'step2_many'):
-                            c_hist, phi_hist = self.sim.step2_many(
-                                c, phi, self.voltage_indices, voltage_amount,
-                                int(rl_steps), rtol=1e-3, atol=1e-14, max_iter=50, k_reaction=k_reaction
+                        # RL perturbations during game over
+                        spec = "idle" if rl_diffusion else str(rl_type)
+                        # Two-phase support with signed tokens, e.g., '-scramble+idle', '+backrow-backrow'
+                        import re as _re
+                        parts = _re.findall(r"[+-]?(?:scramble|backrow|idle)", spec.lower())
+                        if not parts:
+                            parts = ["idle"]
+                        if len(parts) == 1:
+                            parts = [parts[0], parts[0]]
+                        n1 = int(rl_steps // 2)
+                        n2 = int(rl_steps - n1)
+
+                        rng = np.random.default_rng()
+
+                        def ramp_fac(t: int, total: int, ramp: int) -> float:
+                            if ramp <= 0 or total <= 0:
+                                return 1.0
+                            up = (t + 1) / float(ramp)
+                            down = (total - t) / float(ramp)
+                            v = min(1.0, max(0.0, min(up, down)))
+                            return float(v)
+
+                        def build_pattern(token: str, base_amp: float) -> list:
+                            token = token.strip()
+                            sign = 1.0
+                            if token.startswith("-"):
+                                sign = -1.0
+                                token = token[1:]
+                            if token.startswith("+"):
+                                token = token[1:]
+                            pat = [np.nan] * 12
+                            if token.lower() == "idle" or token == "":
+                                return pat
+                            if token.lower() == "scramble":
+                                p = int(rng.integers(0, 6))
+                                pat[2 * p] = sign * base_amp
+                                pat[2 * p + 1] = 0.0
+                                return pat
+                            if token.lower() == "backrow":
+                                for p in (3, 4, 5):
+                                    pat[2 * p] = sign * base_amp
+                                    pat[2 * p + 1] = 0.0
+                                return pat
+                            # Unknown token -> idle
+                            return pat
+
+                        # Execute RL window step-by-step to support varying patterns
+                        total_steps_rl = int(rl_steps)
+                        for t_rl in range(total_steps_rl):
+                            # Choose phase
+                            token = parts[0] if t_rl < n1 else parts[1]
+                            amp = self.applied_voltage * ramp_fac(t_rl, total_steps_rl, int(ramp_steps))
+                            stim_pat = build_pattern(token, amp)
+                            measuring_pattern = [0, measuring_voltage, 0, measuring_voltage, 0, measuring_voltage]
+                            voltage_amount = measuring_pattern + stim_pat
+
+                            c_prev = c.copy()
+                            c, phi = self.sim.step2(
+                                c_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
                             )
-                            # Append each RL step to H5 (currents are NaN during RL perturbation)
-                            for s in range(c_hist.shape[1]):
-                                c = c_hist[:, s]
-                                phi = phi_hist[:, s]
-                                self._append_step(
-                                    dsets,
-                                    c,
-                                    phi,
-                                    pong_game.get_ball_position(),
-                                    pong_game.get_platform_position(),
-                                    pong_game.score,
-                                    (np.nan, np.nan, np.nan),
-                                    voltage_amount,
-                                )
-                        else:
-                            for _ in range(rl_steps):
-                                c_prev = c.copy()
-                                c, phi = self.sim.step2(
-                                    c_prev, phi, self.voltage_indices, voltage_amount, k_reaction=k_reaction
-                                )
-                                # During RL perturbation, measured current is undefined; log NaNs
-                                self._append_step(
-                                    dsets,
-                                    c,
-                                    phi,
-                                    pong_game.get_ball_position(),
-                                    pong_game.get_platform_position(),
-                                    pong_game.score,
-                                    (np.nan, np.nan, np.nan),
-                                    voltage_amount,
-                                )
+                            # During RL perturbation, measured current is undefined; log NaNs
+                            self._append_step(
+                                dsets,
+                                c,
+                                phi,
+                                pong_game.get_ball_position(),
+                                pong_game.get_platform_position(),
+                                pong_game.score,
+                                (np.nan, np.nan, np.nan),
+                                voltage_amount,
+                            )
                     
 
                 # Sense ball position -> voltage pattern
