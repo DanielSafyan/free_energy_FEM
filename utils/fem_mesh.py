@@ -131,6 +131,61 @@ class TriangularMesh:
 
         return csc_matrix(K)
 
+    # --- Boundary edges utilities (2D) ---
+    def _compute_boundary_edges(self):
+        if hasattr(self, "_boundary_edges") and self._boundary_edges is not None:
+            return
+        from collections import defaultdict
+        edge_count = defaultdict(int)
+        edge_repr = {}
+        def add_edge(i,j):
+            a,b = (i,j) if i<j else (j,i)
+            edge_count[(a,b)] += 1
+            edge_repr[(a,b)] = (i,j)
+        for tri in self.elements:
+            i,j,k = tri
+            add_edge(i,j)
+            add_edge(j,k)
+            add_edge(k,i)
+        edges = []
+        for key, cnt in edge_count.items():
+            if cnt == 1:
+                i,j = edge_repr[key]
+                edges.append((i,j))
+        self._boundary_edges = np.array(edges, dtype=np.int32)
+
+    def get_boundary_edges(self):
+        """Return boundary edges as an array of shape (n_edges, 2) with node indices."""
+        self._compute_boundary_edges()
+        return self._boundary_edges
+
+    def assemble_boundary_mass_matrix_edges(self, edge_ids, scalar=1.0):
+        """
+        Assemble boundary mass matrix over selected boundary edges.
+        For a boundary edge with length L and linear basis [N_i, N_j],
+        the local matrix is (L/6)*[[2,1],[1,2]] multiplied by 'scalar'.
+        Returns a csc_matrix of shape (N_nodes, N_nodes).
+        """
+        from scipy.sparse import lil_matrix
+        self._compute_boundary_edges()
+        N = self.num_nodes()
+        M = lil_matrix((N, N))
+        edges = self._boundary_edges
+        for eid in edge_ids:
+            if eid < 0 or eid >= len(edges):
+                continue
+            i, j = map(int, edges[eid])
+            pi = self.nodes[i]
+            pj = self.nodes[j]
+            L = float(np.linalg.norm(pj - pi))
+            w_ii = scalar * (L / 3.0)  # (L/6)*2
+            w_ij = scalar * (L / 6.0)  # (L/6)*1
+            M[i, i] += w_ii
+            M[j, j] += w_ii
+            M[i, j] += w_ij
+            M[j, i] += w_ij
+        return csc_matrix(M)
+
 
 def create_structured_mesh(Lx=1.0, Ly=1.0, nx=20, ny=20):
     """Creates a structured mesh of triangular elements on a rectangle."""

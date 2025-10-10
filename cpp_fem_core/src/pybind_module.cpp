@@ -24,6 +24,7 @@ PYBIND11_MODULE(fem_core_py, m) {
         .def("numElements", &TetrahedralMesh::numElements)
         .def("getNodes", &TetrahedralMesh::getNodes)
         .def("getElements", &TetrahedralMesh::getElements)
+        .def("getBoundaryFaces", &TetrahedralMesh::getBoundaryFaces)
         .def("getElementData", &TetrahedralMesh::getElementData, 
              py::return_value_policy::reference_internal);
     
@@ -32,6 +33,9 @@ PYBIND11_MODULE(fem_core_py, m) {
         .def(py::init<std::shared_ptr<TetrahedralMesh>, double,
                       double, double, double, double, double,
                       int, int, double, double, double, double, double>())
+        .def("setAdvectionScheme", &NPENSimulation::setAdvectionScheme, py::arg("scheme"))
+        .def("setElectrodeFaces", &NPENSimulation::setElectrodeFaces,
+             py::arg("face_sets"), py::arg("voltages"), py::arg("k_reaction"))
         .def("step", [](NPENSimulation& self, 
                          const Eigen::VectorXd& c_prev, 
                          const Eigen::VectorXd& phi_prev) {

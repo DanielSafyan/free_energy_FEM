@@ -5,6 +5,8 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <memory>
+ #include <string>
+ #include <vector>
 
 class NPENSimulation {
 public:
@@ -44,6 +46,13 @@ public:
     // Getters for physical constants
     double getPhiC() const { return m_phi_c; }
     double getC0() const { return m_c0; }
+
+    // Configuration
+    void setAdvectionScheme(const std::string& scheme) { m_useSG = (scheme == "sg" || scheme == "SG" || scheme == "eafe"); }
+    // Set electrode surfaces via boundary face index sets, with matching voltages (Volts) and reaction rates (1/s)
+    void setElectrodeFaces(const std::vector<std::vector<int>>& face_sets,
+                           const std::vector<double>& voltages,
+                           const std::vector<double>& k_reaction);
     
 private:
     // Mesh
@@ -82,6 +91,16 @@ private:
     // builds matrix with entries A_ij = prefactor * (\nabla phi \cdot \nabla N_i) * \int N_j d\Omega
     // for linear tetrahedra, \int N_j d\Omega = volume / 4
     Eigen::SparseMatrix<double> assembleConvectionMatrix(const Eigen::VectorXd& phi, double prefactor) const;
+
+    // Scharfetter–Gummel/EAFE-like operator for c-equation drift–diffusion (optional)
+    Eigen::SparseMatrix<double> assembleSGOperator(const Eigen::VectorXd& phi, double D1_diff_dim, double D1_mig_dim, int z1) const;
+
+    // Electrode surfaces (boundary faces) and boundary mass matrices
+    bool m_useSG = true;
+    std::vector<std::vector<int>> m_electrodeFaceSets;             // indices into mesh->getBoundaryFaces()
+    std::vector<double>          m_electrodeVoltages;              // Volts
+    std::vector<double>          m_electrodeK;                     // 1/s
+    std::vector<Eigen::SparseMatrix<double>> m_electrodeMboundary; // per-surface boundary mass
 };
 
 #endif // NPEN_SIMULATION_HPP

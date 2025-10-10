@@ -148,6 +148,13 @@ class NernstPlanckElectroneutralSimulation:
         self.num_dofs = 2 * self.num_nodes  # [c, phi]
         self._assemble_constant_matrices()
 
+        # Configuration
+        self.advection_scheme = 'sg'  # 'sg' or 'galerkin'
+        self._electrode_edge_sets: Optional[List[List[int]]] = None  # lists of boundary edge IDs
+        self._electrode_voltages: Optional[List[float]] = None  # Volts
+        self._electrode_k: Optional[List[float]] = None  # 1/s
+        self._M_gamma_list = None  # cached boundary mass matrices per electrode
+
         # Boundary nodes (same convention as NPP class)
         if boundary_nodes is not None:
             self.left_boundary_nodes = boundary_nodes[0]
@@ -197,6 +204,47 @@ class NernstPlanckElectroneutralSimulation:
                     C[nodes[i], nodes[j]] += prefactor * integral
         return csc_matrix(C)
 
+    def _assemble_sg_operator(self, phi: np.ndarray) -> csc_matrix:
+        """Edge-based Scharfetter–Gummel/EAFE operator for 2D triangles.
+        Builds A such that A @ c approximates ∇·(D1_diff ∇c + z1 D1_mig c ∇phi).
+        """
+        from scipy.sparse import lil_matrix
+        N = self.num_nodes
+        A = lil_matrix((N, N))
+        for cell_idx in self.mesh.get_cells():
+            nodes = self.mesh.get_nodes_for_cell(cell_idx)
+            area = self.mesh._element_data[cell_idx]['area']
+            grads = self.mesh._element_data[cell_idx]['grads']  # (3,2)
+            # Local stiffness with unit coeff
+            Kloc = np.zeros((3,3))
+            for i in range(3):
+                for j in range(3):
+                    Kloc[i,j] = area * np.dot(grads[i], grads[j])
+            # Edges in triangle
+            edge_pairs = [(0,1),(1,2),(2,0)]
+            for (li, lj) in edge_pairs:
+                gi, gj = nodes[li], nodes[lj]
+                tau_ij = -Kloc[li, lj]
+                if tau_ij <= 0:
+                    continue
+                dphi = float(phi[gj] - phi[gi])
+                # dimensionless Pe
+                Pe = (self.D1_mig_dim / max(self.D1_diff_dim, 1e-15)) * self.z1 * dphi
+                # Bernoulli function
+                if abs(Pe) < 1e-8:
+                    Bij = 1.0 - 0.5 * Pe
+                    Bji = 1.0 + 0.5 * Pe
+                else:
+                    ePe = np.exp(Pe)
+                    Bij = Pe / (ePe - 1.0)
+                    Bji = -Pe / (np.exp(-Pe) - 1.0)
+                w = self.D1_diff_dim * tau_ij
+                A[gi, gi] += w * Bij
+                A[gi, gj] += -w * Bij
+                A[gj, gj] += w * Bji
+                A[gj, gi] += -w * Bji
+        return csc_matrix(A)
+
     # --- Core residual and Jacobian ---
     def _assemble_residual_and_jacobian(self,
                                          c: np.ndarray, phi: np.ndarray,
@@ -210,11 +258,14 @@ class NernstPlanckElectroneutralSimulation:
         M = self.M_mat
         K = self.K_mat
 
-        # c-equation blocks
-        # Drift (migration) uses D_mig1; diffusion uses D_diff1
-        J_cc_drift = self._assemble_convection_matrix(phi, self.D1_mig_dim * self.z1)
+        # c-equation blocks (SG/EAFE by default)
+        if self.advection_scheme.lower() in ('sg', 'eafe'):
+            A_c = self._assemble_sg_operator(phi)
+        else:
+            J_cc_drift = self._assemble_convection_matrix(phi, self.D1_mig_dim * self.z1)
+            A_c = self.D1_diff_dim * K + J_cc_drift
         K_c_phi = self.mesh.assemble_coupling_matrix(self.D1_mig_dim * self.z1 * c)
-        J11 = M / self.dt_dim + self.D1_diff_dim * K + J_cc_drift
+        J11 = M / self.dt_dim + A_c
         J13 = K_c_phi
 
         # phi-equation blocks from current conservation
@@ -234,8 +285,18 @@ class NernstPlanckElectroneutralSimulation:
         ]).tocsc()
 
         # Residuals
-        R_c = M @ (c - c_prev) / self.dt_dim + self.D1_diff_dim * K @ c + K_c_phi @ phi
+        R_c = M @ (c - c_prev) / self.dt_dim + A_c @ c + K_c_phi @ phi
         R_phi = K_phi_phi @ phi + (-(self.D1_diff_dim - self.D2_diff_dim)) * (K @ c)
+
+        # Robin boundary for c on electrode surfaces (edges)
+        if self._M_gamma_list is not None:
+            for s, Mgamma in enumerate(self._M_gamma_list):
+                if self._electrode_k is None or s >= len(self._electrode_k):
+                    continue
+                k_dim = (self._electrode_k[s] * self.L_c) / max(self.D_c, 1e-15)
+                coeff = -k_dim
+                J11 = (J11 + coeff * Mgamma).tocsc()
+                R_c = R_c + coeff * (Mgamma @ c)
 
         Residual = np.concatenate([R_c, R_phi])
         return Residual, Jacobian
@@ -260,6 +321,33 @@ class NernstPlanckElectroneutralSimulation:
             residual[dof_idx] = phi[node_idx] - self.voltage_dim
 
         return jacobian.tocsc(), residual
+
+    def _apply_surface_voltage(self, jacobian, residual, phi):
+        """Apply Dirichlet on phi for all nodes belonging to configured electrode edge sets."""
+        if not self._electrode_edge_sets or not self._electrode_voltages:
+            return jacobian, residual
+        from scipy.sparse import lil_matrix
+        jac = jacobian.tolil()
+        phi_off = 1 * self.num_nodes
+        # Build node set per surface
+        b_edges = self.mesh.get_boundary_edges()
+        seen = np.zeros(self.num_nodes, dtype=bool)
+        for s, edges in enumerate(self._electrode_edge_sets):
+            V = self._electrode_voltages[s] if s < len(self._electrode_voltages) else 0.0
+            Vdim = V / self.phi_c
+            for eid in edges:
+                if eid < 0 or eid >= len(b_edges):
+                    continue
+                i, j = map(int, b_edges[eid])
+                for node in (i, j):
+                    if seen[node]:
+                        continue
+                    seen[node] = True
+                    dof = phi_off + node
+                    jac[dof, :] = 0
+                    jac[dof, dof] = 1
+                    residual[dof] = phi[node] - Vdim
+        return jac.tocsc(), residual
 
     def _apply_one_node_electrode(self, jacobian, residual, phi, applied_voltage, node_idx):
         jacobian = jacobian.tolil()
@@ -289,7 +377,10 @@ class NernstPlanckElectroneutralSimulation:
             initial_residual_norm = -1.0
             for it in range(max_iter):
                 residual, jacobian = self._assemble_residual_and_jacobian(c, phi, c_prev)
-                jacobian, residual = self.apply_vertex_voltage(jacobian, residual, phi)
+                if self._electrode_edge_sets:
+                    jacobian, residual = self._apply_surface_voltage(jacobian, residual, phi)
+                else:
+                    jacobian, residual = self.apply_vertex_voltage(jacobian, residual, phi)
 
                 nrm = np.linalg.norm(residual)
                 norms.append(nrm)
@@ -320,7 +411,9 @@ class NernstPlanckElectroneutralSimulation:
         for it in range(max_iter):
             residual, jacobian = self._assemble_residual_and_jacobian(c, phi, c_initial)
 
-            if applied_voltages is not None:
+            if self._electrode_edge_sets:
+                jacobian, residual = self._apply_surface_voltage(jacobian, residual, phi)
+            elif applied_voltages is not None:
                 for voltage in applied_voltages:
                     if np.isnan(voltage.time_sequence[step_idx]):
                         continue
@@ -347,6 +440,23 @@ class NernstPlanckElectroneutralSimulation:
         print(f"Amount of change in phi: {np.linalg.norm(phi - phi_initial)}")
         return c, phi
 
+    # --- Configuration setters ---
+    def set_advection_scheme(self, scheme: str):
+        self.advection_scheme = scheme.lower()
+
+    def set_electrode_edges(self, edge_sets: List[List[int]], voltages: List[float], k_reaction: List[float]):
+        """Configure electrode surfaces (edges) with voltages (V) and reaction rates (1/s).
+        Also precompute boundary mass matrices for Robin c-condition.
+        """
+        self._electrode_edge_sets = edge_sets
+        self._electrode_voltages = voltages
+        self._electrode_k = k_reaction
+        # Precompute boundary mass matrices per surface
+        self._M_gamma_list = []
+        for edges in edge_sets:
+            Mgamma = self.mesh.assemble_boundary_mass_matrix_edges(edges, scalar=1.0)
+            self._M_gamma_list.append(Mgamma)
+
     def step2(self, c_initial: np.ndarray, phi_initial: np.ndarray,
               electrode_indices: np.ndarray, applied_voltages: np.ndarray,
               rtol: float = 1e-3, atol: float = 1e-14, max_iter: int = 50):
@@ -363,13 +473,16 @@ class NernstPlanckElectroneutralSimulation:
         for it in range(max_iter):
             residual, jacobian = self._assemble_residual_and_jacobian(c, phi, c_initial)
 
-            # Apply Dirichlet BCs at specified nodes
-            for elec_idx in electrode_indices:
-                if np.isnan(applied_voltages[elec_idx]):
-                    continue
-                jacobian, residual = self._apply_one_node_electrode(
-                    jacobian, residual, phi, applied_voltages[elec_idx] / self.phi_c, elec_idx
-                )
+            # Apply Dirichlet on surfaces if configured, otherwise on nodes passed in
+            if self._electrode_edge_sets:
+                jacobian, residual = self._apply_surface_voltage(jacobian, residual, phi)
+            else:
+                for elec_idx in electrode_indices:
+                    if np.isnan(applied_voltages[elec_idx]):
+                        continue
+                    jacobian, residual = self._apply_one_node_electrode(
+                        jacobian, residual, phi, applied_voltages[elec_idx] / self.phi_c, elec_idx
+                    )
 
             nrm = np.linalg.norm(residual)
             if it == 0:

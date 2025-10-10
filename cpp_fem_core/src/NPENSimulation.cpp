@@ -3,6 +3,7 @@
 #include <Eigen/SparseLU>
 #include <Eigen/SparseQR>
 #include <unsupported/Eigen/SparseExtra>
+#include <cmath>
 
 NPENSimulation::NPENSimulation(std::shared_ptr<TetrahedralMesh> mesh, double dt, 
                                double D_diff1, double D_mig1, double D_diff2, double D_mig2, double D3, 
@@ -19,6 +20,92 @@ NPENSimulation::NPENSimulation(std::shared_ptr<TetrahedralMesh> mesh, double dt,
     
     // Initialize matrices
     initializeMatrices();
+}
+
+// Store electrode boundary faces and their parameters; preserve cached boundary mass matrices
+// unless the face sets actually change. This avoids expensive reassembly every step.
+void NPENSimulation::setElectrodeFaces(const std::vector<std::vector<int>>& face_sets,
+                                       const std::vector<double>& voltages,
+                                       const std::vector<double>& k_reaction) {
+    bool changed = (m_electrodeFaceSets.size() != face_sets.size());
+    if (!changed) {
+        for (size_t i = 0; i < face_sets.size(); ++i) {
+            if (m_electrodeFaceSets[i].size() != face_sets[i].size()) { changed = true; break; }
+            for (size_t j = 0; j < face_sets[i].size(); ++j) {
+                if (m_electrodeFaceSets[i][j] != face_sets[i][j]) { changed = true; break; }
+            }
+            if (changed) break;
+        }
+    }
+    m_electrodeFaceSets = face_sets;
+    m_electrodeVoltages = voltages;
+    m_electrodeK = k_reaction;
+    if (changed) {
+        m_electrodeMboundary.clear();
+    }
+}
+
+// Bernoulli function used in SG discretization
+static inline double bernoulli(double x) {
+    const double tol = 1e-8;
+    if (std::abs(x) < tol) return 1.0 - 0.5 * x;
+    double ex = std::exp(x);
+    return x / (ex - 1.0);
+}
+
+Eigen::SparseMatrix<double> NPENSimulation::assembleSGOperator(const Eigen::VectorXd& phi, double D1_diff_dim, double D1_mig_dim, int z1) const {
+    // Edge-based exponential fitting over linear tetrahedra.
+    // For each element, for each of its 6 edges (i,j):
+    //   tau_ij = -\int_K grad N_i · grad N_j dK  (positive)
+    //   Pe_ij  = (D1_mig_dim/D1_diff_dim) * z1 * (phi_j - phi_i)
+    //   Contrib:
+    //     A_ii += D1_diff_dim * tau_ij * B(Pe_ij)
+    //     A_ij -= D1_diff_dim * tau_ij * B(Pe_ij)
+    //     A_jj += D1_diff_dim * tau_ij * B(-Pe_ij)
+    //     A_ji -= D1_diff_dim * tau_ij * B(-Pe_ij)
+    const size_t N = m_mesh->numNodes();
+    const size_t E = m_mesh->numElements();
+    std::vector<Eigen::Triplet<double>> trips;
+    trips.reserve(E * 6 * 8); // 6 edges, 8 triplets (ii,ij,jj,ji)
+
+    const Eigen::MatrixXi& elems = m_mesh->getElements();
+    for (size_t e = 0; e < E; ++e) {
+        const ElementData& ed = m_mesh->getElementData(e);
+        // Local stiffness (unit coefficient): Kloc(i,j) = vol * gradNi·gradNj
+        Eigen::Matrix4d Kloc = Eigen::Matrix4d::Zero();
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                Kloc(i,j) = ed.volume * ed.grads.row(i).dot(ed.grads.row(j));
+            }
+        }
+        int n[4] = { elems(e,0), elems(e,1), elems(e,2), elems(e,3) };
+        // All 6 edges of the tetrahedron
+        const int edgePairs[6][2] = { {0,1},{0,2},{0,3},{1,2},{1,3},{2,3} };
+        for (int ee = 0; ee < 6; ++ee) {
+            int li = edgePairs[ee][0];
+            int lj = edgePairs[ee][1];
+            int gi = n[li];
+            int gj = n[lj];
+            double tau_ij = -Kloc(li, lj); // positive
+            if (tau_ij <= 0) continue;
+            double dphi = phi(gj) - phi(gi);
+            double Pe = (D1_mig_dim / std::max(D1_diff_dim, 1e-15)) * static_cast<double>(z1) * dphi;
+            double Bij = bernoulli(Pe);
+            double Bji = bernoulli(-Pe);
+            double w = D1_diff_dim * tau_ij;
+            // ii, ij
+            trips.emplace_back(gi, gi, w * Bij);
+            trips.emplace_back(gi, gj, -w * Bij);
+            // jj, ji
+            trips.emplace_back(gj, gj, w * Bji);
+            trips.emplace_back(gj, gi, -w * Bji);
+        }
+    }
+
+    Eigen::SparseMatrix<double> A(N, N);
+    A.setFromTriplets(trips.begin(), trips.end());
+    A.makeCompressed();
+    return A;
 }
 
 Eigen::SparseMatrix<double> NPENSimulation::assembleWeightedStiffness(const Eigen::VectorXd& weight) const {
@@ -137,20 +224,27 @@ void NPENSimulation::step(const Eigen::VectorXd& c_prev,
 
     for (int it = 0; it < max_iter; ++it) {
         // Build Jacobian blocks
-        Eigen::SparseMatrix<double> J_cc_drift = assembleConvectionMatrix(phi, D1_mig_dim * m_z1);
+        // c-equation operator: SG if enabled, else Galerkin diffusion + linearized drift
+        Eigen::SparseMatrix<double> A_c;
+        if (m_useSG) {
+            A_c = assembleSGOperator(phi, D1_diff_dim, D1_mig_dim, m_z1);
+        } else {
+            Eigen::SparseMatrix<double> J_cc_drift = assembleConvectionMatrix(phi, D1_mig_dim * m_z1);
+            A_c = D1_diff_dim * m_K_c + J_cc_drift;
+        }
         // Weighted stiffness blocks treating c as coefficient (migration term)
         Eigen::VectorXd w_cphi = (D1_mig_dim * m_z1) * c;
         Eigen::SparseMatrix<double> K_c_phi = assembleWeightedStiffness(w_cphi);
         Eigen::VectorXd w_phiphi = (D1_mig_dim + D2_mig_dim) * c;
         Eigen::SparseMatrix<double> K_phi_phi = assembleWeightedStiffness(w_phiphi);
 
-        Eigen::SparseMatrix<double> J11 = (1.0 / dt_dim) * m_M_c + D1_diff_dim * m_K_c + J_cc_drift;
+        Eigen::SparseMatrix<double> J11 = (1.0 / dt_dim) * m_M_c + A_c;
         Eigen::SparseMatrix<double> J13 = K_c_phi;
         Eigen::SparseMatrix<double> J31 = -(D1_diff_dim - D2_diff_dim) * m_K_c;
         Eigen::SparseMatrix<double> J33 = K_phi_phi;
 
         // Residuals
-        Eigen::VectorXd R_c   = (1.0 / dt_dim) * (m_M_c * (c  - c_prev)) + D1_diff_dim * (m_K_c * c)  + K_c_phi   * phi;
+        Eigen::VectorXd R_c   = (1.0 / dt_dim) * (m_M_c * (c  - c_prev)) + A_c * c + K_c_phi * phi;
         Eigen::VectorXd R_phi = K_phi_phi * phi + (-(D1_diff_dim - D2_diff_dim)) * (m_K_c * c);
 
         // Assemble big Jacobian via triplets (order: [c, phi])
@@ -261,39 +355,95 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev,
     const double D3_dim = m_D3 / D_c;
     const double dt_dim = m_dt * D_c / (m_L_c * m_L_c);
 
-    // First-order reaction (dim-less); residual has -k*c, so diag adds -k
-    const double k_reac_diag = -k_reaction * m_L_c / D_c;
+    // First-order reaction coefficient (dimensionless): surface Robin n·J + k c = 0
+    // Weak form contribution: add (-k_dimless) * M_boundary to J11 and residual
+    const double k_dimless = k_reaction * m_L_c / D_c;
+    const double k_reac_diag = -k_dimless;
 
     double initial_residual_norm = -1.0;
     for (int it = 0; it < max_iter; ++it) {
-        // Jacobian blocks (same as step())
-        Eigen::SparseMatrix<double> J_cc_drift = assembleConvectionMatrix(phi, D1_mig_dim * m_z1);
+        // Jacobian blocks for c-equation
+        Eigen::SparseMatrix<double> A_c;
+        if (m_useSG) {
+            A_c = assembleSGOperator(phi, D1_diff_dim, D1_mig_dim, m_z1);
+        } else {
+            // fallback: Galerkin diffusion + linearized drift
+            Eigen::SparseMatrix<double> J_cc_drift = assembleConvectionMatrix(phi, D1_mig_dim * m_z1);
+            A_c = D1_diff_dim * m_K_c + J_cc_drift;
+        }
+        // Coupling c-phi (retain existing linearization for phi blocks)
         Eigen::VectorXd w_cphi = (D1_mig_dim * m_z1) * c;
         Eigen::SparseMatrix<double> K_c_phi = assembleWeightedStiffness(w_cphi);
         Eigen::VectorXd w_phiphi = (D1_mig_dim + D2_mig_dim) * c;
         Eigen::SparseMatrix<double> K_phi_phi = assembleWeightedStiffness(w_phiphi);
 
-        Eigen::SparseMatrix<double> J11 = (1.0 / dt_dim) * m_M_c + D1_diff_dim * m_K_c + J_cc_drift;
+        Eigen::SparseMatrix<double> J11 = (1.0 / dt_dim) * m_M_c + A_c;
         Eigen::SparseMatrix<double> J13 = K_c_phi;
         Eigen::SparseMatrix<double> J31 = -(D1_diff_dim - D2_diff_dim) * m_K_c;
         Eigen::SparseMatrix<double> J33 = K_phi_phi;
 
         // Residuals
-        Eigen::VectorXd R_c   = (1.0 / dt_dim) * (m_M_c * (c  - c_prev)) + D1_diff_dim * (m_K_c * c)  + K_c_phi   * phi;
+        Eigen::VectorXd R_c   = (1.0 / dt_dim) * (m_M_c * (c  - c_prev)) + A_c * c + K_c_phi * phi;
         Eigen::VectorXd R_phi = K_phi_phi * phi + (-(D1_diff_dim - D2_diff_dim)) * (m_K_c * c);
 
-        // Apply reaction on c at electrode nodes and collect phi Dirichlet constraints
+        // Build phi Dirichlet set from configured electrode faces if present; else use passed-in indices
         std::vector<std::pair<int,double>> phi_dirichlet; // (node, voltage_dim)
-        phi_dirichlet.reserve(electrode_indices.size());
-        for (int i = 0; i < electrode_indices.size(); ++i) {
-            int node = electrode_indices(i);
-            if (node < 0 || node >= N) continue;
-            if (i >= applied_voltages.size()) continue;
-            double V = applied_voltages(i);
-            if (std::isnan(V)) continue;
-            // Reaction contribution
-            R_c(node) += k_reac_diag * c(node);
-            phi_dirichlet.emplace_back(node, V / m_phi_c);
+        std::vector<Eigen::SparseMatrix<double>> M_gamma_list; // boundary mass per electrode
+        if (!m_electrodeFaceSets.empty()) {
+            // Collect unique nodes on each face set and their voltages
+            const Eigen::MatrixXi& bfaces = m_mesh->getBoundaryFaces();
+            std::vector<char> seen(N, 0);
+            for (size_t s = 0; s < m_electrodeFaceSets.size(); ++s) {
+                double V = (s < m_electrodeVoltages.size() ? m_electrodeVoltages[s] : 0.0);
+                if (std::isnan(V)) continue;
+                double Vdim = V / m_phi_c;
+                // Ensure boundary mass for this surface exists
+                if (s >= m_electrodeMboundary.size()) m_electrodeMboundary.resize(s+1);
+                if (m_electrodeMboundary[s].rows() == 0) {
+                    m_mesh->assembleBoundaryMassMatrix(m_electrodeMboundary[s], m_electrodeFaceSets[s], 1.0);
+                }
+                M_gamma_list.push_back(m_electrodeMboundary[s]);
+                for (int fid : m_electrodeFaceSets[s]) {
+                    if (fid < 0 || fid >= bfaces.rows()) continue;
+                    int i = bfaces(fid,0), j = bfaces(fid,1), k = bfaces(fid,2);
+                    if (!seen[i]) { phi_dirichlet.emplace_back(i, Vdim); seen[i] = 1; }
+                    if (!seen[j]) { phi_dirichlet.emplace_back(j, Vdim); seen[j] = 1; }
+                    if (!seen[k]) { phi_dirichlet.emplace_back(k, Vdim); seen[k] = 1; }
+                }
+            }
+        } else {
+            phi_dirichlet.reserve(electrode_indices.size());
+            for (int i = 0; i < electrode_indices.size(); ++i) {
+                int node = electrode_indices(i);
+                if (node < 0 || node >= N) continue;
+                if (i >= applied_voltages.size()) continue;
+                double V = applied_voltages(i);
+                if (std::isnan(V)) continue;
+                phi_dirichlet.emplace_back(node, V / m_phi_c);
+            }
+        }
+
+        // Apply Robin boundary on c using boundary mass matrices for configured electrode faces
+        if (!M_gamma_list.empty()) {
+            for (size_t s = 0; s < M_gamma_list.size(); ++s) {
+                if (s >= m_electrodeK.size()) continue;
+                double k_s_dim = m_electrodeK[s] * m_L_c / D_c;
+                double coeff = -k_s_dim;
+                const auto& Mgamma = M_gamma_list[s];
+                // R_c += coeff * Mgamma * c ; J11 += coeff * Mgamma
+                R_c += coeff * (Mgamma * c);
+                J11 += coeff * Mgamma;
+            }
+        } else {
+            // Backward compatibility: if caller passed k_reaction and node indices, apply as nodal Robin (lumped boundary)
+            if (electrode_indices.size() > 0 && std::abs(k_reaction) > 0) {
+                for (int i = 0; i < electrode_indices.size(); ++i) {
+                    int node = electrode_indices(i);
+                    if (node < 0 || node >= N) continue;
+                    R_c(node) += k_reac_diag * c(node);
+                    J11.coeffRef(node, node) += k_reac_diag; // safe for compressed? We'll add via triplets below instead if needed
+                }
+            }
         }
 
         // Assemble global Jacobian
@@ -310,8 +460,7 @@ void NPENSimulation::step2(const Eigen::VectorXd& c_prev,
         appendBlock(J13, 0, N);
         appendBlock(J31, N, 0);
         appendBlock(J33, N, N);
-        // Reaction diagonal on J11
-        for (const auto& nd : phi_dirichlet) trips.emplace_back(nd.first, nd.first, k_reac_diag);
+        // Note: reaction contributions (Robin) already added directly to J11 above when using faces; nothing to add here.
 
         // Stack residuals
         Eigen::VectorXd R(2 * N);
