@@ -28,7 +28,7 @@ memory_experiment_loop(
         k_reaction=0.0,
         outdir="metasimulation/output/memory/10-10-25/negativity_for_rl",
         sleep_between_runs=0.0,
-        experiment_list=["uniform"],
+        experiment_list=["random"],
         ramp_steps_list=[20],
         scramble_steps_list=[100],
         scramble_voltage_list=[20],
