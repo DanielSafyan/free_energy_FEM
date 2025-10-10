@@ -253,10 +253,32 @@ def memory_experiment_loop(
                 except Exception:
                     parts.append("id")
             target_tag = "t" + ",".join(parts)
-        cp_tag = os.path.basename(checkpoint) if checkpoint else 'nocp'
+        # Build Windows-safe, compact base filename
+        import re as _re
+        import hashlib as _hl
+        def _slug(text: str, max_len: int) -> str:
+            s = _re.sub(r"[^A-Za-z0-9._-]+", "-", str(text)).strip("-_.")
+            if len(s) <= max_len:
+                return s
+            h = _hl.sha1(str(text).encode("utf-8")).hexdigest()[:8]
+            head = max(0, max_len - 9)
+            return (s[:head] + "-" + h) if head > 0 else h
+
+        amp_slug = _slug(str(amplitude).replace('.', 'p'), 8)
+        exp_slug = _slug(str(experiment), 16)
+        tgt_slug = _slug(target_tag, 48)
+        if checkpoint:
+            cp_base = os.path.splitext(os.path.basename(checkpoint))[0]
+            cp_slug = _slug(cp_base, 20)
+        else:
+            cp_slug = 'nocp'
+
         base_name = (
-            f"mem_idle{idle_steps}_volt{voltage_steps}_tot{total_steps}_amp{str(amplitude).replace('.', 'p')}_exp{experiment}_{target_tag}_{cp_tag}"
+            f"mem_i{idle_steps}_v{voltage_steps}_t{total_steps}_amp{amp_slug}_exp{exp_slug}_tgt{tgt_slug}_cp{cp_slug}"
         )
+        if len(base_name) > 96:
+            h = _hl.sha1(base_name.encode('utf-8')).hexdigest()[:10]
+            base_name = base_name[:85] + '-' + h
         ts_ns = time.time_ns()
         out_path = os.path.join(outdir, f"{base_name}_{ts_ns}.h5")
         suffix = 1

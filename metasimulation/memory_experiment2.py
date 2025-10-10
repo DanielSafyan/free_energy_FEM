@@ -29,6 +29,7 @@ from datetime import datetime
 from typing import List, Sequence
 
 import numpy as np
+import random
 
 from simulations.electrodes_memory_npen import MemoryElectrodes
 from utils.temporal_voltages import TemporalVoltage
@@ -107,7 +108,10 @@ def build_temporal_voltages(sim: MemoryElectrodes,
                             voltage: int,
                             amplitude: float,
                             target_sequence,
-                            ramp_steps: int = 0) -> List[TemporalVoltage]:
+                            seed: int,
+                            ramp_steps: int = 0,
+                            scramble_steps: int = 0,
+                            scramble_voltage: float | None = None) -> List[TemporalVoltage]:
     """Construct TemporalVoltage objects from a block-wise target sequence.
 
     Semantics:
@@ -135,12 +139,15 @@ def build_temporal_voltages(sim: MemoryElectrodes,
 
     # Normalize target_sequence to list[ list[int] | None ]
     blocks: List[List[int] | None] = []
-    if isinstance(target_sequence, str) and target_sequence.strip().lower() == 'all':
+    if isinstance(target_sequence, str) and target_sequence == 'all':
         blocks = [list(range(6))]
+
     elif isinstance(target_sequence, (list, tuple, np.ndarray)):
         for entry in target_sequence:
             if _is_nan_like(entry):
                 blocks.append(None)
+            elif isinstance(entry, str) and 'scramble' in entry:
+                blocks.append(entry)
             elif isinstance(entry, (list, tuple, np.ndarray)):
                 pairs: List[int] = []
                 for p in entry:
@@ -165,17 +172,39 @@ def build_temporal_voltages(sim: MemoryElectrodes,
     pair_right = [np.full(total, np.nan, dtype=float) for _ in range(6)]
 
     t = 0
+    rng = np.random.default_rng(seed)
     for bi, block in enumerate(blocks):
-        # Apply active window for this block
-        start = t
-        end = min(start + max(int(voltage), 0), total)
-        if block is not None and start < end:
-            for p in block:
-                pair_left[p][start:end] = float(amplitude)
-                pair_right[p][start:end] = 0.0
-        t = end
+        # Handle scramble blocks
+        if isinstance(block, str) and 'scramble' in block:
+            scramble_amp = scramble_voltage if scramble_voltage is not None else amplitude
+            is_negative = block.startswith('-')
+            applied_amplitude = -float(scramble_amp) if is_negative else float(scramble_amp)
+            start = t
+            end = min(start + int(scramble_steps), total)
+            if start < end:
+                for i in range(start, end):
+                    p = rng.integers(0, 6)
+                    pair_left[p][i] = applied_amplitude
+                    pair_right[p][i] = 0.0
+            t = end
+        # Apply active window for this block (voltage phase)
+        else:
+            start = t
+            end = min(start + max(int(voltage), 0), total)
+            if block is not None and start < end:
+                for p_val in block:
+                    # Check for negative target encoding
+                    p_str = str(p_val)
+                    is_negative = p_str.startswith('-')
+                    p = int(p_str)
+
+                    applied_amplitude = -float(amplitude) if is_negative else float(amplitude)
+                    pair_left[abs(p)][start:end] = applied_amplitude
+                    pair_right[abs(p)][start:end] = 0.0
+            t = end
         # Insert idle gap between blocks (except after last)
         if bi < len(blocks) - 1 and idle > 0 and t < total:
+
             t = min(t + int(idle), total)
 
     # Build TemporalVoltage list for pairs that were ever active
@@ -214,6 +243,8 @@ def memory_experiment_loop(
     sleep_between_runs: float = 0.0,
     experiment_list: Sequence[str] | None = None,
     ramp_steps_list: Sequence[int] | None = None,
+    scramble_steps_list: Sequence[int] | None = None,
+    scramble_voltage_list: Sequence[float | None] | None = None,
     ramp_voltage = True,
     make_plot = False
 ):
@@ -222,17 +253,19 @@ def memory_experiment_loop(
     # Build combinations
     import itertools
     exps = list(experiment_list) if experiment_list else ["random"]
+    scramble_volts = list(scramble_voltage_list) if scramble_voltage_list is not None else [None]
     combos = list(itertools.product(
         dt_list,
         checkpoints, idle_steps_list, voltage_steps_list, total_steps_list,
         amplitude_list, targets_list,
-        size_list, L_c_list, ramp_steps_list,
+        size_list, L_c_list, ramp_steps_list, scramble_steps_list, scramble_volts,
         exps,
     ))
     if not combos:
         raise ValueError("No experiment combinations provided")
 
-    for (dt,checkpoint, idle_steps, voltage_steps, total_steps, amplitude, target_seq, size, L_c,ramp_steps, experiment) in combos:
+    for (dt,checkpoint, idle_steps, voltage_steps, total_steps, amplitude, target_seq, size, L_c,ramp_steps, scramble_steps, scramble_voltage, experiment) in combos:
+        seed = random.randint(1, 100_000_000)
         ts_human = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[memory] {ts_human} -> Run: idle={idle_steps}, voltage={voltage_steps}, total={total_steps}, amp={amplitude}, target_sequence={target_seq}, L_c={L_c}, exp={experiment}, checkpoint={checkpoint}")
 
@@ -241,12 +274,14 @@ def memory_experiment_loop(
 
         # Build stimulation sequences from block-wise target sequence
         if not ramp_voltage:
-            stim = build_temporal_voltages(sim, total_steps, idle_steps, voltage_steps, amplitude, target_seq)
+            stim = build_temporal_voltages(sim, total_steps, idle_steps, voltage_steps, amplitude, target_seq, seed, scramble_steps=scramble_steps, scramble_voltage=scramble_voltage)
         else:
-            stim = build_temporal_voltages(sim, total_steps, idle_steps, voltage_steps, amplitude, target_seq, ramp_steps=ramp_steps)
+            stim = build_temporal_voltages(sim, total_steps, idle_steps, voltage_steps, amplitude, target_seq, seed, scramble_steps=scramble_steps, ramp_steps=ramp_steps, scramble_voltage=scramble_voltage)
 
         # Target tag for filename
         def _blk_to_str(b):
+            if isinstance(b, str) and 'scramble' in b:
+                return b
             if b is None:
                 return "id"
             if isinstance(b, (list, tuple, np.ndarray)):
@@ -292,7 +327,7 @@ def memory_experiment_loop(
             cp_slug = 'nocp'
 
         base_name = (
-            f"mem_i{idle_steps}_v{voltage_steps}_t{total_steps}_amp{amp_slug}_Lc{Lc_slug}_exp{exp_slug}_tgt{tgt_slug}_dt{dt_slug}_cp{cp_slug}"
+            f"mem_i{idle_steps}_v{voltage_steps}_t{total_steps}_amp{amp_slug}_Lc{Lc_slug}_exp{exp_slug}_tgt{tgt_slug}_dt{dt_slug}_cp{cp_slug}_seed{seed}"
         )
         # Ensure overall base length bound
         if len(base_name) > 96:
@@ -338,18 +373,21 @@ def memory_experiment_loop(
 
             if make_plot:
 
-                plot_results_in_folder(idle_steps, voltage_steps, total_steps,out_path)
+                plot_results_in_folder(idle_steps, voltage_steps, total_steps,out_path,scramble_steps)
                 print(f"[memory] Plotted")
 
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
+
             print(f"[memory] Run failed: {e}")
         finally:
             if sleep_between_runs > 0:
                 time.sleep(sleep_between_runs)
 
 
-def plot_results_in_folder(idle_steps, voltage_steps, total_steps,out_path):
+def plot_results_in_folder(idle_steps, voltage_steps, total_steps,out_path,scramble_steps):
     """Extract, plot and save results for a given NPEN memory simulation HDF5.
 
     Creates a timestamp-named folder beside the .h5 with subfolders:
@@ -517,7 +555,8 @@ def plot_results_in_folder(idle_steps, voltage_steps, total_steps,out_path):
 
         idle_len = max(0, int(idle_steps))
         volt_len = max(0, int(voltage_steps))
-        cycle = idle_len + volt_len
+        scramble_len = max(0, int(scramble_steps))
+        cycle = idle_len + volt_len + scramble_len
         while tptr <= usable_total:
             if first_is_voltage:
                 _add_phase('voltage', volt_len)
@@ -590,21 +629,26 @@ def main():
 
     memory_experiment_loop(
         checkpoints=[None],
-        idle_steps_list=[100],
-        voltage_steps_list=[200],
-        total_steps_list=[300],
+        idle_steps_list=[0],
+        voltage_steps_list=[125],
+        total_steps_list=[1500],
         amplitude_list=[1.0],
-        targets_list=[[[0],[1],[np.nan]],[[np.nan]]],           #,[[1],[0], [2],[np.nan],[np.nan],[1],[0],[2],[2],[0],[0],[2],[2],[0],[0],[2],[2],[0],[0],[2],[2],[0],[0],[2],[2],[0],[0],[2],[2]]],
+        targets_list=[[[0], '-scramble', [0], [0], [0], '-scramble',[0], [0], [0]],
+                    [[0], 'scramble', [0], [0], [0], 'scramble',[0], [0], [0]],
+                    [['-0'], '-scramble', ['-0'], ['-0'], ['-0'], '-scramble',['-0'], ['-0'], ['-0']],
+                    [['-0'], 'scramble', ['-0'], ['-0'], ['-0'], 'scramble',['-0'], ['-0'], ['-0']]],
         measuring_voltage=2.0,
         dt_list=[0.001],
         L_c_list=[1e-2],
         applied_voltage=20.0,
         size_list=[(16, 16, 8)],
         k_reaction=0.0,
-        outdir="metasimulation/output/memory",
+        outdir="metasimulation/output/memory/10-10-25/scramble0vs-scramble-0",
         sleep_between_runs=0.0,
-        experiment_list=["gradientz","gradientx-","gradienty-","gradientz-","gradientx","gradienty"],
-        ramp_steps_list=[20],#
+        experiment_list=["gradientx-"],
+        ramp_steps_list=[20],
+        scramble_steps_list=[125],
+        scramble_voltage_list=[0.5],
         make_plot = True,
     )
 

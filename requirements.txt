@@ -1,8 +1,10 @@
-numpy
-scipy
-pygame
-pygame_gui
+h5py
 matplotlib
+numpy
+pygame
+pygame-ce
+pygame_gui
+scipy
 h5py
 tqdm
 pybind11
